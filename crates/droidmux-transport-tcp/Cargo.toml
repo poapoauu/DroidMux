@@ -1,0 +1,21 @@
+[package]
+name = "droidmux-transport-tcp"
+description = "Native bounded Tokio TCP transport for DroidMux"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = true
+documentation = "https://docs.rs/droidmux-transport-tcp"
+
+[dependencies]
+adb-protocol.workspace = true
+adb-transport.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

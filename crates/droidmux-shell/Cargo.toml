@@ -1,0 +1,27 @@
+[package]
+name = "droidmux-shell"
+description = "Shell v2 and legacy Android shell sessions for DroidMux"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = true
+documentation = "https://docs.rs/droidmux-shell"
+
+[dependencies]
+adb-client.workspace = true
+adb-protocol.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+adb-auth.workspace = true
+adb-transport.workspace = true
+adb-transport-tcp.workspace = true
+async-trait.workspace = true
+
+[lints]
+workspace = true

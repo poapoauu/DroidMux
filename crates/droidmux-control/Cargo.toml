@@ -1,0 +1,24 @@
+[package]
+name = "droidmux-control"
+description = "Native Android screen mirroring and input control for DroidMux"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = true
+documentation = "https://docs.rs/droidmux-control"
+
+[dependencies]
+adb-client.workspace = true
+adb-shell.workspace = true
+adb-sync.workspace = true
+bytes.workspace = true
+image.workspace = true
+openh264.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

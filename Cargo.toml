@@ -1,0 +1,66 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["DroidMux contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/poapoauu/DroidMux"
+publish = false
+
+[workspace.dependencies]
+# DroidMux crates use stable internal aliases so implementation imports remain concise.
+adb-protocol = { package = "droidmux-protocol", version = "0.1.0", path = "crates/droidmux-protocol" }
+adb-transport = { package = "droidmux-transport", version = "0.1.0", path = "crates/droidmux-transport" }
+adb-transport-tcp = { package = "droidmux-transport-tcp", version = "0.1.0", path = "crates/droidmux-transport-tcp" }
+adb-auth = { package = "droidmux-auth", version = "0.1.0", path = "crates/droidmux-auth" }
+adb-pairing = { package = "droidmux-pairing", version = "0.1.0", path = "crates/droidmux-pairing" }
+adb-client = { package = "droidmux-client", version = "0.1.0", path = "crates/droidmux-client" }
+adb-shell = { package = "droidmux-shell", version = "0.1.0", path = "crates/droidmux-shell" }
+adb-sync = { package = "droidmux-sync", version = "0.1.0", path = "crates/droidmux-sync" }
+adb-package = { package = "droidmux-package", version = "0.1.0", path = "crates/droidmux-package" }
+adb-logcat = { package = "droidmux-logcat", version = "0.1.0", path = "crates/droidmux-logcat" }
+adb-screenshot = { package = "droidmux-screenshot", version = "0.1.0", path = "crates/droidmux-screenshot" }
+adb-control = { package = "droidmux-control", version = "0.1.0", path = "crates/droidmux-control" }
+adb-forward = { package = "droidmux-forward", version = "0.1.0", path = "crates/droidmux-forward" }
+droidmux = { version = "0.1.0", path = "crates/droidmux" }
+
+# Async runtime and data.
+tokio = { version = "1.53.1", features = ["full"] }
+async-trait = "0.1.91"
+bytes = "1.12.1"
+base64 = "0.22.1"
+thiserror = "2.0.19"
+
+# Authentication, pairing, and secure transport.
+rsa = "0.9.10"
+rand = "0.8.7"
+sha1 = { version = "0.10.7", features = ["oid"] }
+sha2 = "0.10.9"
+rustls = { version = "0.23.35", default-features = false, features = ["ring", "std"] }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
+zeroize = "1.9.0"
+secrecy = "0.10.3"
+aes-gcm = { version = "0.10.3", features = ["zeroize"] }
+curve25519-dalek = { version = "4.1.3", features = ["rand_core", "zeroize"] }
+hkdf = "0.12.4"
+rcgen = { version = "0.13.2", default-features = false, features = ["pem", "ring", "zeroize"] }
+subtle = "2.6.1"
+
+# Optional screen control.
+openh264 = "0.9.7"
+image = { version = "=0.25.9", default-features = false, features = ["jpeg"] }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+todo = "deny"
+unwrap_used = "deny"

@@ -1,0 +1,20 @@
+[package]
+name = "droidmux-logcat"
+description = "Streaming Android logcat service for DroidMux"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = true
+documentation = "https://docs.rs/droidmux-logcat"
+
+[dependencies]
+adb-client.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

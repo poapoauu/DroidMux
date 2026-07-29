@@ -1,0 +1,26 @@
+[package]
+name = "droidmux-sync"
+description = "Bounded ADB Sync v1 and v2 file operations for DroidMux"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = true
+documentation = "https://docs.rs/droidmux-sync"
+
+[dependencies]
+adb-client.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+adb-auth.workspace = true
+adb-protocol.workspace = true
+adb-transport.workspace = true
+async-trait.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,39 @@
+[package]
+name = "droidmux-pairing"
+description = "Native Android 11+ wireless debugging pairing and TLS for DroidMux"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = true
+documentation = "https://docs.rs/droidmux-pairing"
+
+[dependencies]
+adb-auth.workspace = true
+adb-client.workspace = true
+adb-protocol.workspace = true
+adb-transport.workspace = true
+adb-transport-tcp.workspace = true
+aes-gcm.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+curve25519-dalek.workspace = true
+hkdf.workspace = true
+rand.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
+secrecy.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio-rustls.workspace = true
+tokio.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+adb-shell.workspace = true
+
+[lints]
+workspace = true

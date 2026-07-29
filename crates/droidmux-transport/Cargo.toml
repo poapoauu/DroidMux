@@ -1,0 +1,19 @@
+[package]
+name = "droidmux-transport"
+description = "Asynchronous packet transport abstraction for DroidMux"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = true
+documentation = "https://docs.rs/droidmux-transport"
+
+[dependencies]
+adb-protocol.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
