@@ -120,6 +120,25 @@ pub struct MirrorFrame {
     pub key_frame: bool,
 }
 
+/// One decoded RGBA frame ready for a native texture or other zero-copy UI
+/// bridge.
+///
+/// Unlike [`MirrorFrame`], this representation avoids JPEG encoding and keeps
+/// the decoded pixels in a form suitable for high-frequency presentation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirrorPixelFrame {
+    /// Pixels in RGBA8888 order, tightly packed by row.
+    pub rgba: Bytes,
+    /// Decoded frame width.
+    pub width: u32,
+    /// Decoded frame height.
+    pub height: u32,
+    /// Device encoder presentation timestamp in microseconds.
+    pub presentation_time_us: u64,
+    /// Whether the source packet was an H.264 key frame.
+    pub key_frame: bool,
+}
+
 /// A running embedded scrcpy-server video and control session.
 pub struct MirrorSession {
     device_name: String,
@@ -286,6 +305,57 @@ impl MirrorSession {
         }
     }
 
+    /// Waits for the next decoded RGBA frame that is due for presentation.
+    ///
+    /// Every packet is still submitted to the decoder so inter-frame codec
+    /// state remains valid. Conversion runs on Tokio's blocking pool and does
+    /// not perform JPEG encoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the stream closes, decoding fails, or the decoded
+    /// dimensions cannot fit in memory.
+    pub async fn next_pixel_frame(
+        &self,
+        minimum_interval: Duration,
+    ) -> Result<MirrorPixelFrame, MirrorError> {
+        self.ensure_running()?;
+        let mut video = self.video.lock().await;
+        loop {
+            let packet = video.next_packet().await?;
+            match packet {
+                VideoPacket::Session { width, height } => {
+                    video.width = width;
+                    video.height = height;
+                }
+                VideoPacket::Config(data) => {
+                    decode_pixel_packet(Arc::clone(&self.decoder), data, false).await?;
+                }
+                VideoPacket::Frame {
+                    data,
+                    presentation_time_us,
+                    key_frame,
+                } => {
+                    let now = Instant::now();
+                    let emit_frame = preview_is_due(video.last_preview_at, now, minimum_interval);
+                    let Some(frame) =
+                        decode_pixel_packet(Arc::clone(&self.decoder), data, emit_frame).await?
+                    else {
+                        continue;
+                    };
+                    video.last_preview_at = Some(now);
+                    return Ok(MirrorPixelFrame {
+                        rgba: frame.rgba,
+                        width: frame.width,
+                        height: frame.height,
+                        presentation_time_us,
+                        key_frame,
+                    });
+                }
+            }
+        }
+    }
+
     /// Injects one finger event in encoded-video coordinates.
     ///
     /// # Errors
@@ -371,6 +441,12 @@ struct EncodedPreview {
     height: u32,
 }
 
+struct DecodedPixelFrame {
+    rgba: Bytes,
+    width: u32,
+    height: u32,
+}
+
 struct DecoderState {
     decoder: Decoder,
     rgb: Vec<u8>,
@@ -421,6 +497,54 @@ async fn decode_video_packet(
             .map_err(|error| MirrorError::Frame(error.to_string()))?;
         Ok(Some(EncodedPreview {
             jpeg: Bytes::from(jpeg),
+            width: frame_width,
+            height: frame_height,
+        }))
+    })
+    .await
+    .map_err(|error| MirrorError::Decode(format!("video decode worker failed: {error}")))?
+}
+
+async fn decode_pixel_packet(
+    decoder: Arc<StdMutex<DecoderState>>,
+    data: Bytes,
+    emit_frame: bool,
+) -> Result<Option<DecodedPixelFrame>, MirrorError> {
+    spawn_blocking(move || {
+        let mut state = decoder
+            .lock()
+            .map_err(|_| MirrorError::Decode("video decoder lock was poisoned".to_owned()))?;
+        let DecoderState { decoder, rgb } = &mut *state;
+        let Some(decoded_frame) = decoder
+            .decode(&data)
+            .map_err(|error| MirrorError::Decode(error.to_string()))?
+        else {
+            return Ok(None);
+        };
+        if !emit_frame {
+            return Ok(None);
+        }
+
+        let (width, height) = decoded_frame.dimensions();
+        let rgba_len = width
+            .checked_mul(height)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| {
+                MirrorError::Frame("decoded dimensions overflow memory size".to_owned())
+            })?;
+        if rgba_len > MAX_VIDEO_PACKET_SIZE * 4 {
+            return Err(MirrorError::Frame(format!(
+                "decoded RGBA frame requires {rgba_len} bytes"
+            )));
+        }
+        rgb.resize(rgba_len, 0);
+        decoded_frame.write_rgba8(rgb);
+        let frame_width = u32::try_from(width)
+            .map_err(|_| MirrorError::Frame("decoded width exceeds u32".to_owned()))?;
+        let frame_height = u32::try_from(height)
+            .map_err(|_| MirrorError::Frame("decoded height exceeds u32".to_owned()))?;
+        Ok(Some(DecodedPixelFrame {
+            rgba: Bytes::copy_from_slice(rgb),
             width: frame_width,
             height: frame_height,
         }))

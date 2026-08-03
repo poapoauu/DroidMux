@@ -11,4 +11,6 @@ mod session;
 
 pub use display::{AndroidDisplay, list_displays};
 pub use error::MirrorError;
-pub use session::{AndroidKey, MirrorFrame, MirrorOptions, MirrorSession, MirrorTouchAction};
+pub use session::{
+    AndroidKey, MirrorFrame, MirrorOptions, MirrorPixelFrame, MirrorSession, MirrorTouchAction,
+};
