@@ -19,6 +19,8 @@ and this project follows Semantic Versioning.
 
 ### Changed
 
+- Split the project documentation into synchronized English and Simplified Chinese READMEs,
+  with a concise English crates.io landing page and explicit SDK scope and requirements.
 - Isolated transport state, reconnect policy, control queues, flow-control credit, and resource
   limits by device session, stream, or transfer for concurrent multi-device embedding.
 - Added bounded Shell output and decompressed Sync download limits with per-operation overrides.
