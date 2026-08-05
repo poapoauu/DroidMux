@@ -224,14 +224,6 @@ impl ShellSession {
             Ok(())
         }
     }
-
-    async fn collect_stdout(&self) -> Bytes {
-        collect_output(&self.stdout).await
-    }
-
-    async fn collect_stderr(&self) -> Bytes {
-        collect_output(&self.stderr).await
-    }
 }
 
 impl fmt::Debug for ShellSession {
@@ -338,16 +330,81 @@ pub async fn execute_with_options(
     options: ShellOptions,
 ) -> Result<ShellOutput, ShellError> {
     let session = open_shell(client, command, options).await?;
-    let (stdout, stderr, exit_code) = tokio::join!(
-        session.collect_stdout(),
-        session.collect_stderr(),
-        session.wait()
-    );
+    let mut stdout = BytesMut::new();
+    let mut stderr = BytesMut::new();
+    let mut total_output_bytes = 0;
+    let mut stdout_open = true;
+    let mut stderr_open = true;
+    let mut exit_code = None;
+    let wait = session.wait();
+    tokio::pin!(wait);
+
+    while stdout_open || stderr_open || exit_code.is_none() {
+        tokio::select! {
+            chunk = session.read_stdout(), if stdout_open => {
+                match chunk {
+                    Some(chunk) => {
+                        if let Err(error) = append_collected_output(
+                            &mut stdout,
+                            &chunk,
+                            options.max_output_bytes,
+                            &mut total_output_bytes,
+                        ) {
+                            let _ = session.cancel().await;
+                            return Err(error);
+                        }
+                    }
+                    None => stdout_open = false,
+                }
+            }
+            chunk = session.read_stderr(), if stderr_open => {
+                match chunk {
+                    Some(chunk) => {
+                        if let Err(error) = append_collected_output(
+                            &mut stderr,
+                            &chunk,
+                            options.max_output_bytes,
+                            &mut total_output_bytes,
+                        ) {
+                            let _ = session.cancel().await;
+                            return Err(error);
+                        }
+                    }
+                    None => stderr_open = false,
+                }
+            }
+            result = &mut wait, if exit_code.is_none() => exit_code = Some(result),
+        }
+    }
+
+    let exit_code = exit_code.ok_or(ShellError::ReaderStopped)??;
     Ok(ShellOutput {
-        stdout,
-        stderr,
-        exit_code: exit_code?,
+        stdout: stdout.freeze(),
+        stderr: stderr.freeze(),
+        exit_code,
     })
+}
+
+fn append_collected_output(
+    output: &mut BytesMut,
+    chunk: &[u8],
+    limit: Option<usize>,
+    total: &mut usize,
+) -> Result<(), ShellError> {
+    let actual = total
+        .checked_add(chunk.len())
+        .ok_or_else(|| ShellError::OutputTooLarge {
+            limit: limit.unwrap_or(usize::MAX),
+            actual: usize::MAX,
+        })?;
+    if let Some(limit) = limit {
+        if actual > limit {
+            return Err(ShellError::OutputTooLarge { limit, actual });
+        }
+    }
+    output.extend_from_slice(chunk);
+    *total = actual;
+    Ok(())
 }
 
 fn validate_request(
@@ -404,15 +461,6 @@ fn shell_data_limit(wire_limit: usize) -> Result<usize, ShellError> {
             }
             .into()
         })
-}
-
-async fn collect_output(receiver: &Mutex<mpsc::Receiver<Bytes>>) -> Bytes {
-    let mut receiver = receiver.lock().await;
-    let mut output = BytesMut::new();
-    while let Some(chunk) = receiver.recv().await {
-        output.extend_from_slice(&chunk);
-    }
-    output.freeze()
 }
 
 async fn read_legacy(

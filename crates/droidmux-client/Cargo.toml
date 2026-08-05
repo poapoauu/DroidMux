@@ -14,6 +14,7 @@ documentation = "https://docs.rs/droidmux-client"
 adb-auth.workspace = true
 adb-protocol.workspace = true
 adb-transport.workspace = true
+async-trait.workspace = true
 bytes.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

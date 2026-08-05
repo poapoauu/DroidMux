@@ -170,7 +170,9 @@ async fn connects_without_authentication_when_the_device_allows_it() {
     assert_eq!(writes[0].command, AdbCommand::Connect);
     assert_eq!(
         writes[0].payload,
-        Bytes::from_static(b"host::features=shell_v2,cmd,stat_v2,ls_v2,sendrecv_v2")
+        Bytes::from_static(
+            b"host::features=shell_v2,cmd,stat_v2,ls_v2,sendrecv_v2,sendrecv_v2_brotli,sendrecv_v2_lz4,sendrecv_v2_zstd,abb,abb_exec",
+        )
     );
 
     client.close().await.expect("client should close");
@@ -191,16 +193,23 @@ async fn accepts_a_modern_device_banner_without_a_nul_terminator() {
     .expect("CNXN fixture should be valid");
     let (transport, _) = MockTransport::new(vec![packet]);
 
-    let client = AdbClient::connect(Box::new(transport), credential())
-        .await
-        .expect("a non-NUL-terminated modern banner should connect");
+    let client = AdbClient::connect_with_config(
+        Box::new(transport),
+        credential(),
+        droidmux_client::AdbClientConfig {
+            burst_mode: true,
+            ..droidmux_client::AdbClientConfig::default()
+        },
+    )
+    .await
+    .expect("a non-NUL-terminated modern banner should connect");
 
     assert_eq!(client.protocol_version(), ADB_VERSION);
     assert_eq!(client.max_payload(), 1_048_576);
     assert!(client.supports_feature("shell_v2"));
     assert!(client.supports_feature("cmd"));
-    assert!(!client.supports_feature("delayed_ack"));
-    assert!(!client.supports_feature("abb"));
+    assert!(client.supports_feature("delayed_ack"));
+    assert!(client.supports_feature("abb"));
     client.close().await.expect("client should close");
 }
 

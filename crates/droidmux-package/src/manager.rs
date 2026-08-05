@@ -8,7 +8,9 @@ use std::{
 
 use adb_client::AdbClient;
 use adb_shell::{ShellOptions, ShellSession, open_shell};
-use adb_sync::{SyncError, TransferOptions, pull_file_with_options, push_file_with_options};
+use adb_sync::{
+    SyncError, TransferCompression, TransferOptions, pull_file_with_options, push_file_with_options,
+};
 use tokio::io::AsyncReadExt;
 
 use crate::{
@@ -210,7 +212,9 @@ impl<'a> PackageManager<'a> {
         );
         let transfer_options = TransferOptions {
             cancellation,
+            compression: TransferCompression::Auto,
             file_mode: 0o644,
+            ..TransferOptions::default()
         };
         let upload = push_file_with_options(
             self.client,

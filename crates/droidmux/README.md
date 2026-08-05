@@ -1,10 +1,12 @@
 # DroidMux
 
-面向 Rust 的原生异步 ADB 协议 SDK。
+**Pure Rust asynchronous Android Debug Bridge (ADB) client library and embeddable SDK.**
 
-DroidMux 直接连接 Android 设备上的 `adbd`，实现 ADB packet、认证、无线
-调试、逻辑流复用和常用设备服务。运行时不调用 `adb.exe`、`fastboot.exe`、
-ADB Server 或 scrcpy 桌面程序。
+面向 Rust 的原生异步 ADB 客户端库和嵌入式 SDK。
+
+DroidMux 通过 USB、TCP 或 Android 无线调试直接连接设备上的 `adbd`，实现 ADB
+packet、认证、mDNS 发现、多设备会话、逻辑流复用和常用设备服务。运行时不调用
+`adb.exe`、`fastboot.exe`、ADB Server 或 scrcpy 桌面程序。
 
 > 当前版本为 `0.1.0`，尚未发布到 crates.io。
 > 公开发布前仍会进行一次 crate 命名空间和 semver API 审查。
@@ -17,10 +19,12 @@ ADB 在一条设备连接上通过本地 ID 和远端 ID 复用多个逻辑服�
 ## 功能
 
 - ADB 1.0.0/1.0.1 packet 编解码、校验和、长度限制和增量读取。
-- 原生 TCP transport，支持 IPv4、IPv6、超时、分片读取和取消恢复。
+- 原生 TCP transport 和直接 libusb USB Host transport。
+- Android 无线调试 mDNS 发现，支持 TLS 和传统 ADB 服务类型。
 - RSA-2048 ADB 主机认证，支持按顺序尝试多把已授权密钥。
 - Android 11+ 六位码无线配对、SPAKE2、TLS 1.3 和 STLS 连接。
-- 并发逻辑流、独立流关闭、逐流 `WRTE`/`OKAY` 流量控制。
+- 多设备并发会话、设备级自动重连、独立流关闭和逐流 `WRTE`/`OKAY` 流量控制。
+- `delayed_ack` burst mode，按 stream 使用字节窗口并支持并发 `WRTE`。
 - Shell v2：stdin、stdout、stderr、退出码、PTY、窗口尺寸和关闭 stdin。
 - Sync v1/v2：目录、元数据、上传、下载、进度、取消和 64 位文件信息。
 - 应用管理：查询、启动、停止、kill、卸载、单 APK 和 Split APK session 安装。
@@ -35,7 +39,8 @@ DroidMux 是一个 feature-gated facade。协议层没有 Dioxus、SQLite 或桌
 | 层 | crate | 职责 |
 | --- | --- | --- |
 | Wire | `droidmux-protocol` | ADB header、packet、checksum 和边界验证 |
-| Transport | `droidmux-transport`, `droidmux-transport-tcp` | transport trait 和 Tokio TCP |
+| Transport | `droidmux-transport`, `droidmux-transport-tcp`, `droidmux-transport-usb` | transport trait、Tokio TCP 和 libusb USB |
+| Discovery | `droidmux-discovery` | Android 无线调试 mDNS 端点发现 |
 | Identity | `droidmux-auth` | RSA 主机身份、签名和 Android 公钥编码 |
 | Pairing | `droidmux-pairing` | Android 11+ 配对、TLS 和凭据接口 |
 | Multiplexing | `droidmux-client` | CNXN/AUTH 状态机和并发逻辑流 |
@@ -49,6 +54,8 @@ DroidMux 是一个 feature-gated facade。协议层没有 Dioxus、SQLite 或桌
 | Feature | 默认 | 内容 |
 | --- | :---: | --- |
 | `tcp` | 是 | Tokio TCP transport |
+| `usb` | 否 | libusb USB Host transport |
+| `mdns` | 否 | `_adb-tls-connect._tcp.local.` 和 `_adb._tcp.local.` 无线 ADB 端点发现 |
 | `pairing` | 是 | 无线调试配对和 TLS，自动启用 `tcp` |
 | `shell` | 是 | Shell v2 和 legacy shell |
 | `sync` | 是 | Sync v1/v2 文件服务 |
@@ -63,7 +70,7 @@ DroidMux 是一个 feature-gated facade。协议层没有 Dioxus、SQLite 或桌
 
 - Rust 1.85 或更高版本。
 - Tokio runtime。
-- 传统 TCP ADB，或 Android 11+ 无线调试端点。
+- 直接 USB、传统 TCP ADB，或 Android 11+ 无线调试端点。
 - 设备端必须允许当前主机密钥；首次授权可能需要在设备上确认。
 
 当前 workspace 中可使用路径依赖：
@@ -147,18 +154,15 @@ installer session 流式写入 base APK 和 split APK。任何取消、写入失
 
 ## 兼容性
 
-当前离线测试覆盖 packet 分片、认证、多流、Shell v2、Sync v1/v2、无线配对、
-Split APK session、转发和异常关闭。实机基线已覆盖 Android 14 / API 34；在
-正式稳定版本前仍需补齐 Android 8、10、11、13 和 15 的设备矩阵。
+当前离线测试覆盖 packet 分片、认证、多设备/多流、burst mode、自动重连、Shell v2、
+Sync v1/v2、无线配对、Split APK session、USB framing、转发和异常关闭。实机基线
+已覆盖 Android 14 / API 34，以及 Windows 上直接 USB CNXN/AUTH 和并发 Shell v2。
 
-暂未实现：
+当前边界：
 
-- USB discovery/brokering；
-- ADB Server 5037 兼容层；
-- fastboot 协议；
-- `delayed_ack` / burst mode；
-- Sync v2 压缩；
-- `abb`、`abb_exec`、root/unroot、reverse 和 reconnect 服务。
+- 仍需扩展 Android 版本、USB 控制器以及 Linux/macOS 权限和驱动测试矩阵；
+- ADB Server 5037 兼容层和 ADB 命令行客户端不属于这个嵌入式库；
+- fastboot 是独立协议，不属于 DroidMux 的 ADB 客户端范围。
 
 未实现的 feature 不会在 CNXN 中声明。
 

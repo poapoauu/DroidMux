@@ -1,6 +1,6 @@
 [package]
 name = "droidmux"
-description = "Native asynchronous ADB protocol SDK for Rust"
+description = "Pure Rust async Android Debug Bridge (ADB) client SDK for USB, TCP, and wireless debugging"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,12 +10,14 @@ repository.workspace = true
 publish = true
 readme = "README.md"
 documentation = "https://docs.rs/droidmux"
-keywords = ["android", "adb", "wireless", "debugging", "async"]
+keywords = ["android", "adb", "usb", "wireless", "async"]
 categories = ["development-tools", "network-programming"]
 
 [features]
 default = ["tcp", "pairing", "shell", "sync"]
 tcp = ["dep:adb-transport-tcp"]
+usb = ["dep:adb-transport-usb"]
+mdns = ["dep:adb-discovery"]
 pairing = ["dep:adb-pairing", "tcp"]
 shell = ["dep:adb-shell"]
 sync = ["dep:adb-sync"]
@@ -24,7 +26,7 @@ logcat = ["dep:adb-logcat"]
 screenshot = ["dep:adb-screenshot"]
 control = ["dep:adb-control", "shell", "sync"]
 forward = ["dep:adb-forward"]
-full = ["pairing", "package", "logcat", "screenshot", "control", "forward"]
+full = ["pairing", "package", "logcat", "screenshot", "control", "forward", "usb", "mdns"]
 
 [dependencies]
 adb-auth.workspace = true
@@ -32,6 +34,8 @@ adb-client.workspace = true
 adb-protocol.workspace = true
 adb-transport.workspace = true
 adb-transport-tcp = { workspace = true, optional = true }
+adb-transport-usb = { workspace = true, optional = true }
+adb-discovery = { workspace = true, optional = true }
 adb-pairing = { workspace = true, optional = true }
 adb-shell = { workspace = true, optional = true }
 adb-sync = { workspace = true, optional = true }
@@ -40,6 +44,10 @@ adb-logcat = { workspace = true, optional = true }
 adb-screenshot = { workspace = true, optional = true }
 adb-control = { workspace = true, optional = true }
 adb-forward = { workspace = true, optional = true }
+
+[dev-dependencies]
+async-trait.workspace = true
+tokio.workspace = true
 
 [lints]
 workspace = true

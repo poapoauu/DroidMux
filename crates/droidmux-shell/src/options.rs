@@ -1,3 +1,6 @@
+/// Default combined stdout and stderr limit for output-collecting APIs.
+pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+
 /// Options controlling an ADB shell subprocess.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShellOptions {
@@ -11,6 +14,11 @@ pub struct ShellOptions {
     pub rows: u16,
     /// Initial terminal column count for a Shell v2 PTY.
     pub columns: u16,
+    /// Combined stdout and stderr limit used by output-collecting APIs.
+    ///
+    /// This does not affect [`crate::open_shell`] streaming reads. Set this to
+    /// `None` only when the caller provides another output bound.
+    pub max_output_bytes: Option<usize>,
 }
 
 impl ShellOptions {
@@ -22,6 +30,7 @@ impl ShellOptions {
             use_pty: true,
             rows: 24,
             columns: 80,
+            max_output_bytes: Some(DEFAULT_MAX_OUTPUT_BYTES),
         }
     }
 
@@ -33,6 +42,7 @@ impl ShellOptions {
             use_pty: false,
             rows: 24,
             columns: 80,
+            max_output_bytes: Some(DEFAULT_MAX_OUTPUT_BYTES),
         }
     }
 }
@@ -44,6 +54,7 @@ impl Default for ShellOptions {
             use_pty: false,
             rows: 24,
             columns: 80,
+            max_output_bytes: Some(DEFAULT_MAX_OUTPUT_BYTES),
         }
     }
 }

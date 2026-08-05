@@ -58,6 +58,17 @@ pub enum SyncProtocolError {
     /// The device rejected the requested Sync operation.
     #[error("device rejected Sync operation: {0}")]
     Remote(String),
+    /// A requested Sync v2 compression algorithm is not available on the device.
+    #[error("Sync v2 compression algorithm is not negotiated: {0}")]
+    CompressionUnavailable(&'static str),
+    /// Compression or decompression failed after the peer negotiated the algorithm.
+    #[error("Sync v2 {operation} compression failed: {reason}")]
+    CompressionFailed {
+        /// Operation that was being compressed or decompressed.
+        operation: &'static str,
+        /// Codec error description.
+        reason: String,
+    },
     /// Sync v2 returned a non-zero platform error code.
     #[error("device rejected Sync v2 {operation} with error code {code}")]
     RemoteCode {
@@ -87,6 +98,14 @@ pub enum SyncError {
     /// A download would replace an existing local path.
     #[error("download destination already exists: {}", .0.display())]
     DestinationExists(std::path::PathBuf),
+    /// A remote file or its decompressed representation exceeded the configured limit.
+    #[error("download exceeds the {limit}-byte limit: attempted {actual} bytes")]
+    DownloadTooLarge {
+        /// Maximum decompressed bytes accepted for this transfer.
+        limit: u64,
+        /// Size reported or produced by the device.
+        actual: u64,
+    },
     /// The caller canceled an active transfer.
     #[error("file transfer was canceled")]
     Canceled,

@@ -1,0 +1,19 @@
+[package]
+name = "droidmux-discovery"
+description = "mDNS discovery for Android wireless debugging endpoints"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = true
+documentation = "https://docs.rs/droidmux-discovery"
+
+[dependencies]
+mdns-sd.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

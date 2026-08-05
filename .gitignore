@@ -5,3 +5,4 @@ Thumbs.db
 .idea/
 .vscode/
 test-results/
+.codebase-memory/

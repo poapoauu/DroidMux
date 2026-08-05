@@ -319,6 +319,46 @@ async fn legacy_shell_collects_combined_output_without_an_exit_code() {
 }
 
 #[tokio::test]
+async fn collected_output_is_limited_per_command() {
+    let (client, inbound, mut writes) = connected_client(true).await;
+    let options = ShellOptions {
+        max_output_bytes: Some(4),
+        ..ShellOptions::default()
+    };
+    let command = execute_with_options(&client, "printf 12345", options);
+    let peer = async {
+        let (local_id, remote_id) =
+            accept_open("shell,v2,raw:printf 12345", &inbound, &mut writes).await;
+        inbound
+            .send(Ok(AdbPacket::new(
+                AdbCommand::Write,
+                remote_id,
+                local_id,
+                shell_frame(1, b"12345"),
+            )
+            .expect("the Shell v2 response should be valid")))
+            .expect("the Shell v2 response should reach the client");
+
+        let okay = receive_packet(&mut writes).await;
+        assert_eq!(okay.command, AdbCommand::Okay);
+        let close = receive_packet(&mut writes).await;
+        assert_eq!(close.command, AdbCommand::Close);
+        assert_eq!(close.arg0, local_id);
+        assert_eq!(close.arg1, remote_id);
+    };
+
+    let (result, ()) = tokio::join!(command, peer);
+    assert!(matches!(
+        result,
+        Err(ShellError::OutputTooLarge {
+            limit: 4,
+            actual: 5
+        })
+    ));
+    client.close().await.expect("the client should close");
+}
+
+#[tokio::test]
 async fn rejects_shell_v2_before_opening_on_an_unsupported_device() {
     let (client, _inbound, mut writes) = connected_client(false).await;
     let error = execute(&client, "getprop")

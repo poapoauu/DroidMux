@@ -3,7 +3,7 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use adb_auth::RsaAdbCredential;
-use adb_client::AdbClient;
+use adb_client::{AdbClient, AdbClientConfig};
 use adb_transport_tcp::{TcpTransport, TcpTransportConfig};
 use droidmux_shell::{ShellOptions, ShellOutput, execute, open_shell};
 
@@ -155,5 +155,48 @@ async fn runs_interactive_terminal_on_a_live_device() -> Result<(), Box<dyn std:
 
     client.close().await?;
     println!("[ADB_SESSION] status=closed");
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires DROIDMUX_LIVE_ADB_ENDPOINT and a reachable ADB device"]
+async fn runs_burst_mode_shell_write_on_a_live_device() -> Result<(), Box<dyn std::error::Error>> {
+    let endpoint = std::env::var("DROIDMUX_LIVE_ADB_ENDPOINT")?;
+    let address: SocketAddr = endpoint.parse()?;
+    let config = TcpTransportConfig {
+        connect_timeout: Duration::from_secs(3),
+        read_timeout: Duration::from_secs(15),
+        write_timeout: Duration::from_secs(5),
+        close_timeout: Duration::from_secs(5),
+        ..TcpTransportConfig::default()
+    };
+    let transport = TcpTransport::connect(address, config).await?;
+    let authenticator = Arc::new(RsaAdbCredential::generate("droidmux@burst-live-test")?);
+    let client = AdbClient::connect_with_config(
+        Box::new(transport),
+        authenticator,
+        AdbClientConfig {
+            burst_mode: true,
+            ..AdbClientConfig::default()
+        },
+    )
+    .await?;
+    assert!(client.supports_feature("delayed_ack"));
+
+    let options = ShellOptions::interactive();
+    let session = Arc::new(open_shell(&client, "printf droidmux-burst-ok; exit", options).await?);
+    session.write_stdin("burst-input\n").await?;
+    let stdout_session = Arc::clone(&session);
+    let stdout = async move {
+        let mut output = Vec::new();
+        while let Some(chunk) = stdout_session.read_stdout().await {
+            output.extend_from_slice(&chunk);
+        }
+        output
+    };
+    let (stdout, exit_code) = tokio::join!(stdout, session.wait());
+    assert!(String::from_utf8_lossy(&stdout).contains("droidmux-burst-ok"));
+    assert_eq!(exit_code?, Some(0));
+    client.close().await?;
     Ok(())
 }

@@ -66,23 +66,25 @@ impl SyncSession {
         &self,
         path: &[u8],
         mode: u32,
+        flags: u32,
         cancellation: &TransferCancellation,
     ) -> Result<(), SyncError> {
         let mut message = length_prefixed(*b"SND2", path)?;
         message.extend_from_slice(b"SND2");
         message.extend_from_slice(&mode.to_le_bytes());
-        message.extend_from_slice(&0_u32.to_le_bytes());
+        message.extend_from_slice(&flags.to_le_bytes());
         self.write_all_cancellable(&message, cancellation).await
     }
 
     pub(crate) async fn write_recv_v2(
         &self,
         path: &[u8],
+        flags: u32,
         cancellation: &TransferCancellation,
     ) -> Result<(), SyncError> {
         let mut message = length_prefixed(*b"RCV2", path)?;
         message.extend_from_slice(b"RCV2");
-        message.extend_from_slice(&0_u32.to_le_bytes());
+        message.extend_from_slice(&flags.to_le_bytes());
         self.write_all_cancellable(&message, cancellation).await
     }
 

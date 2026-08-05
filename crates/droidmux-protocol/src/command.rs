@@ -4,6 +4,8 @@ use crate::AdbProtocolError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u32)]
 pub enum AdbCommand {
+    /// Synchronizes a transport state (`SYNC`).
+    Sync = 0x434e_5953,
     /// Starts an ADB connection handshake (`CNXN`).
     Connect = 0x4e58_4e43,
     /// Carries an authentication message (`AUTH`).
@@ -39,6 +41,7 @@ impl TryFrom<u32> for AdbCommand {
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
+            value if value == Self::Sync.wire_value() => Ok(Self::Sync),
             value if value == Self::Connect.wire_value() => Ok(Self::Connect),
             value if value == Self::Auth.wire_value() => Ok(Self::Auth),
             value if value == Self::Open.wire_value() => Ok(Self::Open),

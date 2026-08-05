@@ -13,6 +13,10 @@ pub use adb_protocol as protocol;
 /// Transport abstraction implemented by TCP and wireless TLS backends.
 pub use adb_transport as transport;
 
+/// mDNS discovery for Android wireless-debugging endpoints.
+#[cfg(feature = "mdns")]
+pub use adb_discovery as discovery;
+
 /// scrcpy-server session protocol and screen-control primitives.
 #[cfg(feature = "control")]
 pub use adb_control as control;
@@ -40,3 +44,7 @@ pub use adb_sync as sync;
 /// Native Tokio TCP transport.
 #[cfg(feature = "tcp")]
 pub use adb_transport_tcp as tcp;
+
+/// Native USB Host transport backed by libusb.
+#[cfg(feature = "usb")]
+pub use adb_transport_usb as usb;

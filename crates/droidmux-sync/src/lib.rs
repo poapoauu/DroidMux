@@ -11,8 +11,9 @@ mod session;
 
 pub use error::{SyncError, SyncProtocolError};
 pub use model::{
-    RemoteFile, RemoteFileMetadataV2, RemoteFileType, TransferCancellation, TransferDirection,
-    TransferOptions, TransferProgress,
+    DEFAULT_MAX_DOWNLOAD_BYTES, RemoteFile, RemoteFileMetadataV2, RemoteFileType,
+    TransferCancellation, TransferCompression, TransferDirection, TransferOptions,
+    TransferProgress,
 };
 pub use protocol::{
     list_directory, lstat, pull_file, pull_file_with_options, push_bytes, push_bytes_with_options,

@@ -2,21 +2,29 @@
 
 [![CI](https://github.com/poapoauu/DroidMux/actions/workflows/ci.yml/badge.svg)](https://github.com/poapoauu/DroidMux/actions/workflows/ci.yml)
 
-面向 Rust 的原生异步 Android Debug Bridge（ADB）协议 SDK。
+**Pure Rust asynchronous Android Debug Bridge (ADB) client library and embeddable SDK.**
+DroidMux connects directly to `adbd` over USB, TCP, or Android wireless debugging. It
+supports mDNS discovery, multi-device sessions, RSA authentication and pairing, Shell v2,
+Sync v2, package management, forwarding, logcat, and screenshots without an adb-server or
+ADB command-line process.
 
-DroidMux 直接连接 Android 设备上的 `adbd`，提供协议编解码、主机认证、无线
-调试、逻辑流复用和常用设备服务。运行时不调用 `adb.exe`、`fastboot.exe`、ADB
-Server 或 scrcpy 桌面客户端。
+面向 Rust 的原生异步 Android Debug Bridge（ADB）客户端库和嵌入式 SDK。
+
+DroidMux 通过 USB、TCP 或 Android 无线调试直接连接设备上的 `adbd`，提供协议
+编解码、主机认证、设备发现、多设备会话、逻辑流复用和常用设备服务。运行时不调用
+`adb.exe`、`fastboot.exe`、ADB Server 或 scrcpy 桌面客户端。
 
 当前版本为 `0.1.0`，公开 API 在进入稳定版本前可能调整。
 
 ## 功能
 
 - ADB 1.0.0/1.0.1 packet 编解码、校验和、长度限制和增量读取。
-- 原生异步 TCP transport，支持 IPv4、IPv6、超时、取消和分片读取恢复。
+- 原生异步 TCP transport 和直接 libusb USB Host transport，无需系统 ADB Server。
+- Android 无线调试 mDNS 发现，支持现代 TLS 和传统 ADB 服务类型。
 - RSA-2048 ADB 主机认证，支持按顺序尝试多把已授权密钥。
 - Android 11+ 六位码无线配对、SPAKE2、TLS 1.3 和 STLS 连接。
-- 并发逻辑流、独立流关闭以及逐流 `WRTE`/`OKAY` 流量控制。
+- 多设备并发会话、设备级自动重连、独立逻辑流关闭和逐流 `WRTE`/`OKAY` 流量控制。
+- `delayed_ack` burst mode，按 stream 使用字节窗口并支持并发 `WRTE`。
 - Shell v2 和 legacy shell，包括 stdin、stdout、stderr、退出码、PTY 和窗口尺寸。
 - Sync v1/v2 文件元数据、目录、上传、下载、进度和取消。
 - 应用查询、启动、停止、kill、卸载、单 APK 和 Split APK session 安装。
@@ -45,6 +53,8 @@ droidmux = { git = "https://github.com/poapoauu/DroidMux", default-features = fa
 | Feature | 默认 | 能力 |
 | --- | :---: | --- |
 | `tcp` | 是 | Tokio TCP transport |
+| `usb` | 否 | libusb USB Host transport；不自动启用 adb-server |
+| `mdns` | 否 | `_adb-tls-connect._tcp.local.` 和 `_adb._tcp.local.` 无线 ADB 端点发现 |
 | `pairing` | 是 | Android 11+ 无线配对和 TLS；自动启用 `tcp` |
 | `shell` | 是 | Shell v2 和 legacy shell |
 | `sync` | 是 | Sync v1/v2 文件服务 |
@@ -60,7 +70,8 @@ droidmux = { git = "https://github.com/poapoauu/DroidMux", default-features = fa
 | 模块 | 用途 |
 | --- | --- |
 | `protocol` | ADB header、packet、checksum 和边界验证 |
-| `transport`, `tcp` | transport 抽象和 Tokio TCP 实现 |
+| `transport`, `tcp`, `usb` | transport 抽象、Tokio TCP 和 libusb USB 实现 |
+| `discovery` | 无线 ADB mDNS 端点发现 |
 | `auth`, `pairing` | RSA 主机身份、无线配对和 TLS |
 | `client` | CNXN/AUTH 状态机和并发逻辑流 |
 | `shell`, `sync`, `package` | Shell、文件和应用管理 |
@@ -122,17 +133,16 @@ OpenH264 使用 BSD-2-Clause，但该许可证不授予 H.264 专利许可。公
 
 ## 兼容性
 
-离线测试覆盖 packet 分片、认证、多流、Shell v2、Sync v1/v2、无线配对、Split
-APK session、转发和异常关闭。当前实机基线为 Android 14 / API 34。
+离线测试覆盖 packet 分片、认证、多设备/多流、burst mode、自动重连、Shell v2、
+Sync v1/v2、无线配对、Split APK session、USB framing、转发和异常关闭。实机基线
+包含 Android 14 / API 34，以及 Windows 上直接连接 Xiaomi MI 8 Explorer Edition
+的 USB CNXN/AUTH 和并发 Shell v2；USB 稳定性循环通过 20/20 次。
 
-尚未实现：
+当前边界：
 
-- USB discovery/brokering；
-- ADB Server 5037 兼容层；
-- fastboot 协议；
-- `delayed_ack` / burst mode；
-- Sync v2 压缩；
-- `abb`、`abb_exec`、root/unroot、reverse 和 reconnect 服务。
+- 仍需扩展 Android 版本、USB 控制器以及 Linux/macOS 权限和驱动测试矩阵；
+- ADB Server 5037 兼容层和 ADB 命令行客户端不属于这个嵌入式库；
+- fastboot 是独立协议，不属于 DroidMux 的 ADB 客户端范围。
 
 详细对比见 [`docs/compatibility.md`](docs/compatibility.md)。
 
@@ -150,6 +160,14 @@ cargo build --workspace --all-features
 ```powershell
 $env:DROIDMUX_LIVE_ADB_ENDPOINT = "192.168.1.20:5555"
 cargo test --workspace --all-features -- --ignored --nocapture
+```
+
+直接 USB 实机测试要求先停止系统 ADB Server，并提供已授权的 PKCS#8 ADB 私钥：
+
+```powershell
+$env:DROIDMUX_LIVE_ADB_KEY = Join-Path $env:USERPROFILE ".android\adbkey"
+$env:DROIDMUX_LIVE_USB_DEVICE = "2717:ff48"
+cargo test -p droidmux --all-features --test live_usb -- --ignored --nocapture
 ```
 
 ## 许可证

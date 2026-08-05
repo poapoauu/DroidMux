@@ -22,6 +22,7 @@ fn connect_packet() -> AdbPacket {
 fn command_codes_match_the_wire_protocol() {
     let cases = [
         (AdbCommand::Connect, 0x4e58_4e43),
+        (AdbCommand::Sync, 0x434e_5953),
         (AdbCommand::Auth, 0x4854_5541),
         (AdbCommand::Open, 0x4e45_504f),
         (AdbCommand::Okay, 0x5941_4b4f),

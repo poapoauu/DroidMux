@@ -1,6 +1,6 @@
 # ADB SDK compatibility review
 
-Review date: 2026-07-28.
+Review date: 2026-08-05.
 
 This review compares DroidMux's pure Rust ADB stack with:
 
@@ -21,7 +21,8 @@ individually:
 | Layer | Crates |
 | --- | --- |
 | Wire | `droidmux-protocol` |
-| Transport | `droidmux-transport`, `droidmux-transport-tcp` |
+| Transport | `droidmux-transport`, `droidmux-transport-tcp`, `droidmux-transport-usb` |
+| Discovery | `droidmux-discovery` |
 | Identity and security | `droidmux-auth`, `droidmux-pairing` |
 | Multiplexing | `droidmux-client` |
 | Services | `droidmux-shell`, `droidmux-sync`, `droidmux-package`, `droidmux-logcat`, `droidmux-screenshot`, `droidmux-forward` |
@@ -42,7 +43,7 @@ not require `adb.exe`, `fastboot.exe`, or the scrcpy desktop executable.
 | Android 11+ pairing | Yes | Yes | No | TLS 1.3, exporter, SPAKE2, and PeerInfo |
 | STLS connection upgrade | Yes | Yes | No | Implemented by the wireless transport |
 | Wireless mDNS | Yes | Optional module | No | adb, TLS connect, and TLS pairing services |
-| Concurrent logical streams | Yes | Yes | Yes | Rust has per-stream flow control and close isolation |
+| Concurrent logical streams | Yes | Yes | Yes | Per-device sessions with per-stream flow control, queues, and close isolation |
 | Shell v2 | Yes | Yes | Yes | stdout, stderr, exit, stdin, close-stdin, PTY, resize |
 | Sync v1 | Yes | Yes | Yes | LIST, STAT, SEND, RECV, FAIL, and QUIT |
 | Sync v2 metadata | Yes | Yes | No | STA2, LST2, LIS2 with 64-bit fields |
@@ -51,10 +52,14 @@ not require `adb.exe`, `fastboot.exe`, or the scrcpy desktop executable.
 | Single APK install | Yes | Yes | Yes | Rust also supports listing, export, launch, stop, and kill |
 | Split APK/session install | Yes | Yes | Yes | Shell v2 streaming, aggregate progress, cancellation, commit, and abandon-on-failure |
 | TCP forwarding | Yes | Yes | Yes | Explicit local bind, bounded concurrency, lifecycle events, and clean cancellation |
-| root/unroot adbd | No | No | Yes | Optional future service API |
+| root/unroot adbd | Yes | No | Yes | Direct `root:` and `unroot:` service APIs; caller controls device policy |
+| `abb` / `abb_exec` | Yes | No | No | Raw Binder Bridge stream plus bounded `abb_exec:<command>` helper |
+| reconnect service | Yes | No | No | Direct `reconnect` request plus optional transport-factory auto reconnect |
+| reverse forwarding | Yes | Yes | Yes | `reverse:forward`, list, kill, and kill-all service APIs |
 | adb server port 5037 | No | No | Yes | Intentionally outside the direct-client core |
-| USB discovery/brokering | No | No | Via adb server | Outside current scope |
-| delayed_ack / burst mode | No | Yes | No | Must not be advertised until flow control is implemented |
+| USB Host transport | Optional | No | Via adb server | Direct libusb transport; exercised on Windows with a Xiaomi MI 8 Explorer Edition |
+| Wireless mDNS discovery | Optional | Optional module | Via adb server | `droidmux-discovery`, modern `_adb-tls-connect._tcp.local.` and legacy `_adb._tcp.local.` |
+| delayed_ack / burst mode | Yes | Yes | No | Explicit host opt-in, per-stream 32 MiB window, concurrent WRTE, signed 32-bit byte deltas, and close-safe inbound acknowledgements |
 | scrcpy video/control sockets | Yes | Consumer only | Consumer only | Kept behind the SDK's `control` feature |
 
 ## Findings fixed in this review
@@ -81,6 +86,26 @@ not require `adb.exe`, `fastboot.exe`, or the scrcpy desktop executable.
 9. Split APK installation now validates and streams every APK through Android's
    package installer session API. Cancellation, write errors, and commit errors
    all attempt `install-abandon`, with both failures preserved if cleanup fails.
+10. ADB burst mode is now an explicit client option and is covered by offline
+    multiplexing tests plus a live Android 14 interactive shell test.
+11. Optional transport-factory reconnect repeats CNXN/AUTH with exponential
+    backoff and exposes a `Reconnecting` connection state; streams from the
+    failed transport are closed rather than reused with stale remote IDs.
+12. USB reads now use a bounded queue owned by each device transport. Endpoint
+    stalls are cleared after claiming the interface, stale data from an older
+    USB session is drained before the reader starts, and closing one transport
+    wakes its blocked reader without affecting another device.
+13. A remote `CLSE` no longer discards unread final `WRTE` payloads. Closed
+    streams retain a per-stream acknowledgement tombstone until every queued
+    payload, including a zero-length `WRTE` in delayed-ACK mode, has been consumed.
+
+## Live USB coverage
+
+The direct libusb path was tested on Windows with a Xiaomi MI 8 Explorer
+Edition (`2717:ff48`) while the system adb server was stopped. The test performs
+CNXN/AUTH using an existing authorized host key and runs two Shell v2 commands
+concurrently over independent logical streams. One run plus a 20-run stability
+loop completed successfully, including the observed `WRTE`/`CLSE` close race.
 
 ## Remaining protocol work
 
@@ -88,12 +113,12 @@ Priority 1:
 
 - add live compatibility coverage across Android 8, 10, 11, 13, and 15.
 
+- expand live USB coverage to Linux and macOS, additional USB controllers, and
+  more Android device generations. Windows currently has one physical-device
+  fixture in addition to the offline framing and endpoint tests.
+
 Priority 2:
 
-- implement `delayed_ack`/burst flow control before advertising the feature;
-- add Sync v2 compression flags after benchmarking zstd, lz4, and brotli;
-- add `abb`/`abb_exec`, root/unroot, reconnect, and reverse services where they
-  make sense for a direct-client SDK;
 - namespace internal package names and perform a semver/API review before a
   crates.io release.
 

@@ -6,5 +6,5 @@ mod options;
 mod session;
 
 pub use error::{ShellError, ShellProtocolError};
-pub use options::ShellOptions;
+pub use options::{DEFAULT_MAX_OUTPUT_BYTES, ShellOptions};
 pub use session::{ShellOutput, ShellSession, execute, execute_with_options, open_shell};

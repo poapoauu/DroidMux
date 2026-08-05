@@ -15,6 +15,10 @@ pub enum AdbClientError {
     #[error(transparent)]
     Protocol(#[from] AdbProtocolError),
 
+    /// A logical ADB stream failed while servicing a request.
+    #[error(transparent)]
+    Stream(#[from] AdbStreamError),
+
     /// RSA authentication failed.
     #[error(transparent)]
     Authentication(#[from] AdbAuthError),
@@ -56,6 +60,10 @@ pub enum AdbClientError {
     #[error("local ADB payload limit cannot be represented on the wire")]
     InvalidLocalPayloadLimit,
 
+    /// Burst mode requires a non-zero receive window in `OPEN` packets.
+    #[error("ADB delayed-ack receive window must be greater than zero")]
+    InvalidDelayedAckWindow,
+
     /// A service name is empty or contains an embedded NUL byte.
     #[error("invalid ADB service name")]
     InvalidServiceName,
@@ -85,6 +93,24 @@ pub enum AdbClientError {
     SessionClosed {
         /// Human-readable termination reason.
         reason: String,
+    },
+
+    /// A request/response service returned an ADB `FAIL` response.
+    #[error("ADB service request failed: {message}")]
+    ServiceRequestFailed {
+        /// Device-provided failure message.
+        message: String,
+    },
+
+    /// A service response did not begin with a recognized status word.
+    #[error("invalid ADB service response")]
+    InvalidServiceResponse,
+
+    /// A bounded service response exceeded the local memory limit.
+    #[error("ADB service response exceeds the {limit}-byte limit")]
+    ServiceResponseTooLarge {
+        /// Maximum response size accepted by the convenience API.
+        limit: usize,
     },
 }
 

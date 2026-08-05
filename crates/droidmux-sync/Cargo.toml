@@ -13,14 +13,18 @@ documentation = "https://docs.rs/droidmux-sync"
 [dependencies]
 adb-client.workspace = true
 bytes.workspace = true
+brotli.workspace = true
+lz4_flex.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+zstd.workspace = true
 
 [dev-dependencies]
 adb-auth.workspace = true
 adb-protocol.workspace = true
 adb-transport.workspace = true
 async-trait.workspace = true
+adb-transport-tcp.workspace = true
 
 [lints]
 workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "droidmux-transport-usb"
+description = "Asynchronous ADB USB Host transport backed by libusb"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = true
+documentation = "https://docs.rs/droidmux-transport-usb"
+
+[dependencies]
+adb-protocol.workspace = true
+adb-transport.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+rusb.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

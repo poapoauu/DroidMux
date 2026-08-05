@@ -16,7 +16,9 @@ publish = false
 adb-protocol = { package = "droidmux-protocol", version = "0.1.0", path = "crates/droidmux-protocol" }
 adb-transport = { package = "droidmux-transport", version = "0.1.0", path = "crates/droidmux-transport" }
 adb-transport-tcp = { package = "droidmux-transport-tcp", version = "0.1.0", path = "crates/droidmux-transport-tcp" }
+adb-transport-usb = { package = "droidmux-transport-usb", version = "0.1.0", path = "crates/droidmux-transport-usb" }
 adb-auth = { package = "droidmux-auth", version = "0.1.0", path = "crates/droidmux-auth" }
+adb-discovery = { package = "droidmux-discovery", version = "0.1.0", path = "crates/droidmux-discovery" }
 adb-pairing = { package = "droidmux-pairing", version = "0.1.0", path = "crates/droidmux-pairing" }
 adb-client = { package = "droidmux-client", version = "0.1.0", path = "crates/droidmux-client" }
 adb-shell = { package = "droidmux-shell", version = "0.1.0", path = "crates/droidmux-shell" }
@@ -34,6 +36,11 @@ async-trait = "0.1.91"
 bytes = "1.12.1"
 base64 = "0.22.1"
 thiserror = "2.0.19"
+brotli = "8.0.4"
+lz4_flex = "0.14.0"
+zstd = "0.13.3"
+mdns-sd = { version = "0.19.2", default-features = false, features = ["logging"] }
+rusb = { version = "0.9.4", features = ["vendored"] }
 
 # Authentication, pairing, and secure transport.
 rsa = "0.9.10"

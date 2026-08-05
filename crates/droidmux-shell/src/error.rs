@@ -95,6 +95,15 @@ pub enum ShellError {
         requirement: &'static str,
     },
 
+    /// A convenience API exceeded its configured combined output limit.
+    #[error("shell output exceeds the {limit}-byte limit after receiving {actual} bytes")]
+    OutputTooLarge {
+        /// Maximum combined stdout and stderr size.
+        limit: usize,
+        /// Combined size after receiving the rejected chunk.
+        actual: usize,
+    },
+
     /// The caller canceled the shell session.
     #[error("shell session was canceled")]
     Canceled,

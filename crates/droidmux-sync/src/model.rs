@@ -8,6 +8,9 @@ use std::{
 
 use tokio::sync::Notify;
 
+/// Default per-transfer download limit used by [`TransferOptions`].
+pub const DEFAULT_MAX_DOWNLOAD_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
 /// File kind derived from Android's POSIX mode bits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -150,15 +153,39 @@ impl Default for TransferCancellation {
 pub struct TransferOptions {
     /// POSIX permission bits used for uploaded files.
     pub file_mode: u32,
+    /// Compression policy for Sync v2 transfers.
+    pub compression: TransferCompression,
     /// Signal that can interrupt blocked local or network I/O.
     pub cancellation: TransferCancellation,
+    /// Maximum decompressed bytes accepted from the device for one download.
+    ///
+    /// The limit is per transfer, so concurrent devices do not share a global
+    /// counter. Set this to `None` only for explicitly trusted, unbounded pulls.
+    pub max_download_bytes: Option<u64>,
 }
 
 impl Default for TransferOptions {
     fn default() -> Self {
         Self {
             file_mode: 0o644,
+            compression: TransferCompression::Auto,
             cancellation: TransferCancellation::new(),
+            max_download_bytes: Some(DEFAULT_MAX_DOWNLOAD_BYTES),
         }
     }
+}
+
+/// Compression policy for Sync v2 file transfers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferCompression {
+    /// Prefer the best algorithm negotiated with the device, otherwise none.
+    Auto,
+    /// Disable compression even when the device supports it.
+    None,
+    /// Use Brotli compression.
+    Brotli,
+    /// Use LZ4 frame compression.
+    Lz4,
+    /// Use Zstandard compression.
+    Zstd,
 }
