@@ -30,6 +30,13 @@ for Cisco-distributed binary modules does not automatically cover third-party
 source builds, so public or commercial binary distribution requires a separate
 H.264 patent review for relevant jurisdictions.
 
+The `decoder-ffmpeg` feature is opt-in and links FFmpeg libraries supplied by
+the SDK consumer; DroidMux does not bundle them or execute `ffmpeg`. Consumers
+must select an FFmpeg build whose enabled components and LGPL/GPL configuration
+match their distribution model, retain its notices, and comply with dynamic- or
+static-linking obligations. Enabling the backend does not change DroidMux-owned
+source code from `MIT OR Apache-2.0`.
+
 Protocol behavior was compared with Apache-2.0 projects scrcpy, Kadb, and Dadb.
 SkyADB is GPL-3.0 and was used only as a behavioral reference. No SkyADB source
 is included, so DroidMux is not a derivative of that project.
@@ -43,6 +50,8 @@ is included, so DroidMux is not a derivative of that project.
    `control` assets.
 4. Generate a dependency license inventory from the release lockfile.
 5. Review H.264 patent obligations before distributing binaries with `control`.
+6. When enabling `decoder-ffmpeg`, record the exact FFmpeg build configuration,
+   libraries, notices, and linking method included in the distributed binary.
 
 Crates.io package names use the `droidmux-*` namespace. The source directories
 and workspace dependency aliases may retain their historical `adb-*` names;

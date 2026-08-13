@@ -9,6 +9,12 @@ and this project follows Semantic Versioning.
 
 ### Added
 
+- A public `MirrorDecoder` interface, long-lived bounded decode pipeline, latest-frame delivery,
+  reusable pixel buffers, decoder timing counters, and caller-selectable RGBA/BGRA output.
+- An opt-in `decoder-ffmpeg` backend for `droidmux-control`; it links the caller-provided FFmpeg
+  development libraries and never launches an external `ffmpeg` executable.
+- Android Studio-compatible JDWP/DDMS process termination for debuggable applications, with
+  ActivityManager and direct-signal fallbacks for other processes.
 - Direct libusb USB Host transport with Android interface discovery and per-device read queues.
 - Wireless ADB mDNS discovery for TLS connect, TLS pairing, and legacy ADB services.
 - Opt-in `delayed_ack` burst mode with per-stream byte windows and concurrent `WRTE` support.
@@ -19,6 +25,10 @@ and this project follows Semantic Versioning.
 
 ### Changed
 
+- Screen mirroring now decodes on a dedicated worker and preserves the native display resolution
+  when `MirrorOptions::max_size` is zero.
+- Package `kill` now verifies that the original process IDs exited without putting the package in
+  Android's force-stopped state; `force_stop` remains a separate operation.
 - Split the project documentation into synchronized English and Simplified Chinese READMEs,
   with a concise English crates.io landing page and explicit SDK scope and requirements.
 - Isolated transport state, reconnect policy, control queues, flow-control credit, and resource
@@ -29,6 +39,10 @@ and this project follows Semantic Versioning.
 
 ### Fixed
 
+- Accepted JDWP handshakes coalesced with following protocol bytes instead of rejecting the stream
+  as oversized, and bounded each process-termination attempt with a timeout.
+- Preserved decoder metadata across delayed FFmpeg output and flushed the final decoded frame when
+  a mirror stream ends.
 - Preserved queued final `WRTE` payloads and their acknowledgements when a remote `CLSE` arrives
   before the application consumes the stream, including zero-length `WRTE` in delayed-ACK mode.
 - Cleared USB endpoint stalls and drained stale packets before starting a new USB session.

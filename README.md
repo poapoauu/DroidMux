@@ -91,7 +91,7 @@ droidmux = { git = "https://github.com/poapoauu/DroidMux", default-features = fa
 | `pairing` | Yes | Android 11+ wireless pairing and TLS; enables `tcp` |
 | `shell` | Yes | Shell v2 and legacy shell |
 | `sync` | Yes | Sync v1/v2 file services |
-| `package` | No | Application and APK management; enables `shell` and `sync` |
+| `package` | No | Application/APK management plus distinct force-stop and process-kill operations; enables `shell` and `sync` |
 | `logcat` | No | Bounded streaming Logcat |
 | `screenshot` | No | PNG screenshots |
 | `forward` | No | Bounded local TCP forwarding to a device `tcp:<port>` service |
@@ -202,10 +202,39 @@ The `control` feature includes and uploads the Apache-2.0-licensed Android `scrc
 component, but it does not execute the scrcpy desktop client. Video is decoded with an
 `openh264` source build.
 
+`droidmux-control` enables its `decoder-openh264` feature by default. Applications can disable
+that feature and pass another implementation of the public `MirrorDecoder` trait to
+`MirrorSession::start_with_decoder`. The session uses a bounded, long-lived decode pipeline and
+latest-frame delivery so a slow renderer does not accumulate latency. Pixel buffers are reused,
+and `MirrorPipelineStats` exposes decode timing and frame counters.
+
+`MirrorSession::next_pixel_frame` remains the RGBA8888 compatibility API. Native renderers can
+call `next_pixel_frame_with_format` and request `DecodedPixelFormat::Bgra8888`, allowing Windows
+D3D11 textures to consume the returned buffer without a bridge-side channel-copy allocation.
+
+FFmpeg is not a default dependency and DroidMux never launches `ffmpeg.exe`. To select the
+included software backend, depend on the control crate directly and provide an FFmpeg development
+SDK that `ffmpeg-sys-next` can discover:
+
+```toml
+[dependencies]
+droidmux-control = { git = "https://github.com/poapoauu/DroidMux", default-features = false, features = ["decoder-ffmpeg"] }
+```
+
+Create an `FfmpegDecoder` and pass it to `MirrorSession::start_with_decoder`. The application is
+responsible for shipping compatible FFmpeg shared libraries and notices. Enabling both decoder
+features is supported when runtime backend selection is required.
+
 OpenH264 is BSD-2-Clause licensed, but that copyright license does not grant H.264 patent
 rights. Review patent obligations in the target jurisdictions before publicly or commercially
 distributing a binary with the `control` feature. Disable `control` when only ADB protocol
 capabilities are needed.
+
+`PackageManager::force_stop` and `PackageManager::kill` intentionally have different Android
+semantics. `force_stop` prevents normal restart until the package is explicitly launched again.
+`kill` first uses the JDWP/DDMS `EXIT` request used by Android Studio for debuggable processes,
+then tries ActivityManager and a direct signal where device permissions allow it. Android may
+restart services after `kill`, and protected system processes may reject every non-root fallback.
 
 ## Development and Testing
 
@@ -213,16 +242,16 @@ Run the checks used by CI:
 
 ```text
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-cargo build --workspace --all-features
+cargo clippy --workspace --all-targets --features full -- -D warnings
+cargo test --workspace --features full
+cargo build --workspace --features full
 ```
 
 Tests that require a device are ignored by default and enabled explicitly:
 
 ```powershell
 $env:DROIDMUX_LIVE_ADB_ENDPOINT = "192.168.1.20:5555"
-cargo test --workspace --all-features -- --ignored --nocapture
+cargo test --workspace --features full -- --ignored --nocapture
 ```
 
 Direct USB testing requires the system adb server to be stopped and an authorized PKCS#8 ADB
@@ -231,7 +260,7 @@ private key:
 ```powershell
 $env:DROIDMUX_LIVE_ADB_KEY = Join-Path $env:USERPROFILE ".android\adbkey"
 $env:DROIDMUX_LIVE_USB_DEVICE = "2717:ff48"
-cargo test -p droidmux --all-features --test live_usb -- --ignored --nocapture
+cargo test -p droidmux --features full --test live_usb -- --ignored --nocapture
 ```
 
 ## Repository Layout

@@ -22,6 +22,8 @@
 4. 运行 workspace 的 fmt、clippy、test 和 build 门禁。
 5. 对每个包运行 `cargo package --list` 和 `cargo package --no-verify`，检查归档内容。
 6. 发布包含 `control` feature 的构建前完成 H.264 专利评估。
+7. 发布启用 `decoder-ffmpeg` 的二进制前，记录 FFmpeg 的构建配置、链接方式、运行库和
+   许可证声明；SDK crate 本身不捆绑 FFmpeg 二进制文件。
 
 ## 依赖顺序
 

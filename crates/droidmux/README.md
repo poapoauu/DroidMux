@@ -52,7 +52,7 @@ Cargo features:
 | `pairing` | Yes | Android 11+ pairing and TLS; enables `tcp` |
 | `shell` | Yes | Shell v2 and legacy shell |
 | `sync` | Yes | Sync v1/v2 file services |
-| `package` | No | Package and APK management; enables `shell` and `sync` |
+| `package` | No | Package/APK management with force-stop and process-kill; enables `shell` and `sync` |
 | `logcat` | No | Bounded streaming Logcat |
 | `screenshot` | No | PNG screenshots |
 | `forward` | No | Bounded local TCP forwarding |
@@ -109,6 +109,8 @@ DroidMux is dual-licensed under
 [Apache-2.0](https://github.com/poapoauu/DroidMux/blob/main/LICENSE-APACHE).
 
 The optional `control` feature includes the Apache-2.0-licensed scrcpy-server and an OpenH264
-source build. Review the repository's
+source build. The lower-level `droidmux-control` crate also offers an opt-in `decoder-ffmpeg`
+backend for consumers that provide compatible FFmpeg development and runtime libraries. DroidMux
+does not launch `ffmpeg.exe`. Review the repository's
 [licensing notes](https://github.com/poapoauu/DroidMux/blob/main/docs/licensing.md) before
 distributing binaries with screen control enabled.

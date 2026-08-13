@@ -83,7 +83,7 @@ droidmux = { git = "https://github.com/poapoauu/DroidMux", default-features = fa
 | `pairing` | 是 | Android 11+ 无线配对和 TLS；自动启用 `tcp` |
 | `shell` | 是 | Shell v2 和 legacy shell |
 | `sync` | 是 | Sync v1/v2 文件服务 |
-| `package` | 否 | 应用与 APK 管理；自动启用 `shell` 和 `sync` |
+| `package` | 否 | 应用与 APK 管理，以及语义独立的强制停止和进程终止；自动启用 `shell` 和 `sync` |
 | `logcat` | 否 | 有界流式 Logcat |
 | `screenshot` | 否 | PNG 截图 |
 | `forward` | 否 | 本地 TCP 到设备 `tcp:<port>` 服务的有界转发 |
@@ -184,9 +184,35 @@ Android 14 / API 34，以及 Windows 上的直接 USB CNXN/AUTH 和并发 Shell 
 `control` Feature 会携带并上传采用 Apache-2.0 许可证的 Android `scrcpy-server` 组件，
 但不会执行 scrcpy 桌面客户端。视频由源码构建的 `openh264` 解码。
 
+`droidmux-control` 默认启用 `decoder-openh264` Feature。应用可以关闭该 Feature，并通过
+`MirrorSession::start_with_decoder` 传入公共 `MirrorDecoder` trait 的其他实现。会话使用有界
+的长驻解码管线和 latest-frame 交付，渲染端变慢时不会累积延迟。像素缓冲会被复用，
+`MirrorPipelineStats` 提供解码耗时和帧计数。
+
+`MirrorSession::next_pixel_frame` 作为 RGBA8888 兼容 API 保持不变。原生渲染器可以调用
+`next_pixel_frame_with_format` 请求 `DecodedPixelFormat::Bgra8888`，Windows D3D11 纹理可
+直接消费返回的缓冲区，不需要在桥接层再次分配整帧内存完成通道转换。
+
+FFmpeg 不是默认依赖，DroidMux 也不会启动 `ffmpeg.exe`。使用内置的软件解码后端时，直接
+依赖 control crate，并提供 `ffmpeg-sys-next` 能发现的 FFmpeg 开发 SDK：
+
+```toml
+[dependencies]
+droidmux-control = { git = "https://github.com/poapoauu/DroidMux", default-features = false, features = ["decoder-ffmpeg"] }
+```
+
+创建 `FfmpegDecoder` 后传给 `MirrorSession::start_with_decoder`。应用负责随程序分发兼容的
+FFmpeg shared libraries 和许可证声明。需要运行时切换解码器时，可以同时启用两个解码
+Feature。
+
 OpenH264 使用 BSD-2-Clause，但该版权许可证不授予 H.264 专利权。公开或商业分发启用
 `control` 的二进制前，应评估目标地区的专利义务。只需要 ADB 协议能力时，可以关闭
 `control` Feature。
+
+`PackageManager::force_stop` 和 `PackageManager::kill` 的 Android 语义不同。`force_stop` 会
+阻止应用正常重启，直到用户或调用方再次显式启动它；`kill` 对可调试进程优先发送与 Android
+Studio 相同的 JDWP/DDMS `EXIT` 请求，然后按设备权限尝试 ActivityManager 和直接信号。
+服务可能在 `kill` 后被 Android 重新拉起，受保护的系统进程也可能拒绝所有非 root 回退。
 
 ## 开发与测试
 
@@ -194,16 +220,16 @@ OpenH264 使用 BSD-2-Clause，但该版权许可证不授予 H.264 专利权。
 
 ```text
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-cargo build --workspace --all-features
+cargo clippy --workspace --all-targets --features full -- -D warnings
+cargo test --workspace --features full
+cargo build --workspace --features full
 ```
 
 需要设备的测试默认标记为 ignored，需要显式启用：
 
 ```powershell
 $env:DROIDMUX_LIVE_ADB_ENDPOINT = "192.168.1.20:5555"
-cargo test --workspace --all-features -- --ignored --nocapture
+cargo test --workspace --features full -- --ignored --nocapture
 ```
 
 直接 USB 测试要求先停止系统 ADB Server，并提供已授权的 PKCS#8 ADB 私钥：
@@ -211,7 +237,7 @@ cargo test --workspace --all-features -- --ignored --nocapture
 ```powershell
 $env:DROIDMUX_LIVE_ADB_KEY = Join-Path $env:USERPROFILE ".android\adbkey"
 $env:DROIDMUX_LIVE_USB_DEVICE = "2717:ff48"
-cargo test -p droidmux --all-features --test live_usb -- --ignored --nocapture
+cargo test -p droidmux --features full --test live_usb -- --ignored --nocapture
 ```
 
 ## 仓库结构
