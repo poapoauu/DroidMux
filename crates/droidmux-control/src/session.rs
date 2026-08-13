@@ -1,26 +1,21 @@
 use std::{
-    sync::{
-        Arc, Mutex as StdMutex,
-        atomic::{AtomicBool, AtomicU32, Ordering},
-    },
-    time::{Duration, Instant},
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
+    time::Duration,
 };
 
 use adb_client::{AdbClient, AdbStream};
 use adb_shell::{ShellOptions, ShellSession, open_shell};
 use adb_sync::{TransferOptions, push_bytes_with_options};
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::Bytes;
 use image::{ExtendedColorType, codecs::jpeg::JpegEncoder};
-use openh264::{decoder::Decoder, formats::YUVSource};
-use tokio::{sync::Mutex as AsyncMutex, task::spawn_blocking, time::sleep};
+use tokio::{task::spawn_blocking, time::sleep};
 
+#[cfg(feature = "decoder-openh264")]
+use crate::OpenH264Decoder;
 use crate::{
-    MirrorError,
-    protocol::{
-        DEVICE_NAME_LENGTH, H264_CODEC_ID, MAX_VIDEO_PACKET_SIZE, TouchAction, VIDEO_HEADER_LENGTH,
-        VideoPacket, encode_key, encode_touch, parse_device_name, parse_video_header,
-        video_payload_length,
-    },
+    DecodedPixelFormat, MirrorDecoder, MirrorError, MirrorPipelineStats,
+    pipeline::{VideoPipeline, VideoStreamReader},
+    protocol::{TouchAction, encode_key, encode_touch},
 };
 
 const SCRCPY_VERSION: &str = "4.1";
@@ -52,7 +47,7 @@ pub enum AndroidKey {
 pub struct MirrorOptions {
     /// Android logical display identifier to capture and control.
     pub display_id: u32,
-    /// Maximum encoded frame dimension. The other dimension preserves aspect ratio.
+    /// Maximum encoded frame dimension. Zero preserves the native display size.
     pub max_size: u16,
     /// Maximum frames requested from the Android encoder each second.
     pub max_fps: u8,
@@ -81,9 +76,9 @@ impl MirrorOptions {
                 "display_id must be between 0 and 2147483647".to_owned(),
             ));
         }
-        if !(256..=4096).contains(&self.max_size) {
+        if self.max_size != 0 && !(256..=4096).contains(&self.max_size) {
             return Err(MirrorError::InvalidInput(
-                "max_size must be between 256 and 4096".to_owned(),
+                "max_size must be zero or between 256 and 4096".to_owned(),
             ));
         }
         if !(1..=120).contains(&self.max_fps) {
@@ -139,14 +134,33 @@ pub struct MirrorPixelFrame {
     pub key_frame: bool,
 }
 
+/// One decoded CPU pixel buffer in a caller-selected layout.
+///
+/// Use [`MirrorSession::next_pixel_frame_with_format`] when a native renderer
+/// can consume a layout other than RGBA and should avoid a bridge-side copy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirrorPixelBuffer {
+    /// Tightly packed pixels in [`Self::format`].
+    pub pixels: Bytes,
+    /// Decoded frame width.
+    pub width: u32,
+    /// Decoded frame height.
+    pub height: u32,
+    /// Pixel layout used by [`Self::pixels`].
+    pub format: DecodedPixelFormat,
+    /// Device encoder presentation timestamp in microseconds.
+    pub presentation_time_us: u64,
+    /// Whether the source packet was an H.264 key frame.
+    pub key_frame: bool,
+}
+
 /// A running embedded scrcpy-server video and control session.
 pub struct MirrorSession {
     device_name: String,
-    video: AsyncMutex<VideoStreamReader>,
+    pipeline: VideoPipeline,
     video_stream: AdbStream,
     control_stream: AdbStream,
     server: ShellSession,
-    decoder: Arc<StdMutex<DecoderState>>,
     preview_quality: u8,
     touch_move_in_flight: AtomicBool,
     stopped: AtomicBool,
@@ -159,9 +173,29 @@ impl MirrorSession {
     ///
     /// Returns an error when options are invalid, upload or launch fails, the
     /// local abstract sockets do not become ready, or the video header is invalid.
+    #[cfg(feature = "decoder-openh264")]
     pub async fn start(client: &AdbClient, options: MirrorOptions) -> Result<Self, MirrorError> {
+        let decoder = Box::new(OpenH264Decoder::new()?);
+        Self::start_with_decoder(client, options, decoder).await
+    }
+
+    /// Starts a mirror session with a caller-provided video decoder backend.
+    ///
+    /// This entry point lets applications use another software decoder or a
+    /// platform-specific backend without changing the ADB and scrcpy protocol
+    /// implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when options are invalid, upload or launch fails, the
+    /// local abstract sockets do not become ready, the video header is invalid,
+    /// or the decoder worker cannot start.
+    pub async fn start_with_decoder(
+        client: &AdbClient,
+        options: MirrorOptions,
+        decoder: Box<dyn MirrorDecoder>,
+    ) -> Result<Self, MirrorError> {
         let options = options.validate()?;
-        let decoder = Decoder::new().map_err(|error| MirrorError::Decode(error.to_string()))?;
         let transfer_options = TransferOptions {
             file_mode: 0o644,
             ..TransferOptions::default()
@@ -205,18 +239,23 @@ impl MirrorSession {
                 return Err(error);
             }
         };
-        let device_name = video.device_name.clone();
+        let device_name = video.device_name().to_owned();
+        let pipeline = match VideoPipeline::start(video, decoder) {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                let _ = control_stream.close().await;
+                let _ = video_stream.close().await;
+                let _ = server.cancel().await;
+                return Err(error);
+            }
+        };
 
         Ok(Self {
             device_name,
-            video: AsyncMutex::new(video),
+            pipeline,
             video_stream,
             control_stream,
             server,
-            decoder: Arc::new(StdMutex::new(DecoderState {
-                decoder,
-                rgb: Vec::new(),
-            })),
             preview_quality: options.preview_quality,
             touch_move_in_flight: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
@@ -243,10 +282,10 @@ impl MirrorSession {
 
     /// Waits for the next decoded frame that is due for presentation.
     ///
-    /// Every H.264 packet is decoded to preserve codec state, but expensive RGB
-    /// and JPEG conversion is skipped until `minimum_interval` has elapsed.
-    /// Decode and image conversion run on Tokio's blocking pool so callers such
-    /// as a desktop UI executor remain responsive.
+    /// Every H.264 packet is submitted to the long-lived decoder worker to
+    /// preserve codec state. CPU pixel output is produced while a consumer is
+    /// waiting, and JPEG encoding is limited by `minimum_interval`. The worker
+    /// keeps codec and conversion work off the async executor.
     ///
     /// # Errors
     ///
@@ -256,60 +295,15 @@ impl MirrorSession {
         &self,
         minimum_interval: Duration,
     ) -> Result<MirrorFrame, MirrorError> {
-        self.ensure_running()?;
-        let mut video = self.video.lock().await;
-        loop {
-            let packet = video.next_packet().await?;
-            match packet {
-                VideoPacket::Session { width, height } => {
-                    video.width = width;
-                    video.height = height;
-                }
-                VideoPacket::Config(data) => {
-                    decode_video_packet(
-                        Arc::clone(&self.decoder),
-                        data,
-                        self.preview_quality,
-                        false,
-                    )
-                    .await?;
-                }
-                VideoPacket::Frame {
-                    data,
-                    presentation_time_us,
-                    key_frame,
-                } => {
-                    let now = Instant::now();
-                    let encode_preview =
-                        preview_is_due(video.last_preview_at, now, minimum_interval);
-                    let Some(preview) = decode_video_packet(
-                        Arc::clone(&self.decoder),
-                        data,
-                        self.preview_quality,
-                        encode_preview,
-                    )
-                    .await?
-                    else {
-                        continue;
-                    };
-                    video.last_preview_at = Some(now);
-                    return Ok(MirrorFrame {
-                        jpeg: preview.jpeg,
-                        width: preview.width,
-                        height: preview.height,
-                        presentation_time_us,
-                        key_frame,
-                    });
-                }
-            }
-        }
+        let frame = self.next_pixel_frame(minimum_interval).await?;
+        encode_preview(frame, self.preview_quality).await
     }
 
     /// Waits for the next decoded RGBA frame that is due for presentation.
     ///
     /// Every packet is still submitted to the decoder so inter-frame codec
-    /// state remains valid. Conversion runs on Tokio's blocking pool and does
-    /// not perform JPEG encoding.
+    /// state remains valid. Pixel conversion runs on the long-lived decoder
+    /// worker and does not perform JPEG encoding.
     ///
     /// # Errors
     ///
@@ -319,41 +313,49 @@ impl MirrorSession {
         &self,
         minimum_interval: Duration,
     ) -> Result<MirrorPixelFrame, MirrorError> {
+        let frame = self
+            .next_pixel_frame_with_format(minimum_interval, DecodedPixelFormat::Rgba8888)
+            .await?;
+        Ok(MirrorPixelFrame {
+            rgba: frame.pixels,
+            width: frame.width,
+            height: frame.height,
+            presentation_time_us: frame.presentation_time_us,
+            key_frame: frame.key_frame,
+        })
+    }
+
+    /// Waits for the next decoded frame in the requested pixel layout.
+    ///
+    /// Every packet is still submitted to the decoder so inter-frame codec
+    /// state remains valid. The selected layout is produced on the decoder
+    /// worker and can be passed directly to a matching native texture backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the stream closes, decoding fails, the decoder
+    /// returns another layout, or the decoded dimensions cannot fit in memory.
+    pub async fn next_pixel_frame_with_format(
+        &self,
+        minimum_interval: Duration,
+        format: DecodedPixelFormat,
+    ) -> Result<MirrorPixelBuffer, MirrorError> {
         self.ensure_running()?;
-        let mut video = self.video.lock().await;
-        loop {
-            let packet = video.next_packet().await?;
-            match packet {
-                VideoPacket::Session { width, height } => {
-                    video.width = width;
-                    video.height = height;
-                }
-                VideoPacket::Config(data) => {
-                    decode_pixel_packet(Arc::clone(&self.decoder), data, false).await?;
-                }
-                VideoPacket::Frame {
-                    data,
-                    presentation_time_us,
-                    key_frame,
-                } => {
-                    let now = Instant::now();
-                    let emit_frame = preview_is_due(video.last_preview_at, now, minimum_interval);
-                    let Some(frame) =
-                        decode_pixel_packet(Arc::clone(&self.decoder), data, emit_frame).await?
-                    else {
-                        continue;
-                    };
-                    video.last_preview_at = Some(now);
-                    return Ok(MirrorPixelFrame {
-                        rgba: frame.rgba,
-                        width: frame.width,
-                        height: frame.height,
-                        presentation_time_us,
-                        key_frame,
-                    });
-                }
-            }
-        }
+        self.pipeline
+            .next_pixel_frame(minimum_interval, format)
+            .await
+    }
+
+    /// Returns the decoder backend selected for this session.
+    #[must_use]
+    pub fn decoder_backend_name(&self) -> &'static str {
+        self.pipeline.backend_name()
+    }
+
+    /// Returns cumulative native video-pipeline counters.
+    #[must_use]
+    pub fn pipeline_stats(&self) -> MirrorPipelineStats {
+        self.pipeline.stats()
     }
 
     /// Injects one finger event in encoded-video coordinates.
@@ -412,9 +414,11 @@ impl MirrorSession {
             return Ok(());
         }
         let video_result = self.video_stream.close().await.map_err(MirrorError::from);
+        let pipeline_result = self.pipeline.stop().await;
         let control_result = self.control_stream.close().await.map_err(MirrorError::from);
         let server_result = self.server.cancel().await.map_err(MirrorError::from);
         video_result?;
+        pipeline_result?;
         control_result?;
         server_result?;
         Ok(())
@@ -435,130 +439,51 @@ impl MirrorSession {
     }
 }
 
-struct EncodedPreview {
-    jpeg: Bytes,
-    width: u32,
-    height: u32,
-}
-
-struct DecodedPixelFrame {
-    rgba: Bytes,
-    width: u32,
-    height: u32,
-}
-
-struct DecoderState {
-    decoder: Decoder,
-    rgb: Vec<u8>,
-}
-
-async fn decode_video_packet(
-    decoder: Arc<StdMutex<DecoderState>>,
-    data: Bytes,
+async fn encode_preview(
+    frame: MirrorPixelFrame,
     preview_quality: u8,
-    encode_preview: bool,
-) -> Result<Option<EncodedPreview>, MirrorError> {
+) -> Result<MirrorFrame, MirrorError> {
     spawn_blocking(move || {
-        let mut state = decoder
-            .lock()
-            .map_err(|_| MirrorError::Decode("video decoder lock was poisoned".to_owned()))?;
-        let DecoderState { decoder, rgb } = &mut *state;
-        let Some(decoded_frame) = decoder
-            .decode(&data)
-            .map_err(|error| MirrorError::Decode(error.to_string()))?
-        else {
-            return Ok(None);
-        };
-        if !encode_preview {
-            return Ok(None);
-        }
-
-        let (width, height) = decoded_frame.dimensions();
-        let rgb_len = width
-            .checked_mul(height)
-            .and_then(|pixels| pixels.checked_mul(3))
-            .ok_or_else(|| {
-                MirrorError::Frame("decoded dimensions overflow memory size".to_owned())
-            })?;
-        if rgb_len > MAX_VIDEO_PACKET_SIZE * 4 {
-            return Err(MirrorError::Frame(format!(
-                "decoded RGB frame requires {rgb_len} bytes"
-            )));
-        }
-        rgb.resize(rgb_len, 0);
-        decoded_frame.write_rgb8(rgb);
-        let frame_width = u32::try_from(width)
-            .map_err(|_| MirrorError::Frame("decoded width exceeds u32".to_owned()))?;
-        let frame_height = u32::try_from(height)
-            .map_err(|_| MirrorError::Frame("decoded height exceeds u32".to_owned()))?;
-        let mut jpeg = Vec::with_capacity(rgb_len / 8);
-        JpegEncoder::new_with_quality(&mut jpeg, preview_quality)
-            .encode(rgb, frame_width, frame_height, ExtendedColorType::Rgb8)
-            .map_err(|error| MirrorError::Frame(error.to_string()))?;
-        Ok(Some(EncodedPreview {
-            jpeg: Bytes::from(jpeg),
-            width: frame_width,
-            height: frame_height,
-        }))
-    })
-    .await
-    .map_err(|error| MirrorError::Decode(format!("video decode worker failed: {error}")))?
-}
-
-async fn decode_pixel_packet(
-    decoder: Arc<StdMutex<DecoderState>>,
-    data: Bytes,
-    emit_frame: bool,
-) -> Result<Option<DecodedPixelFrame>, MirrorError> {
-    spawn_blocking(move || {
-        let mut state = decoder
-            .lock()
-            .map_err(|_| MirrorError::Decode("video decoder lock was poisoned".to_owned()))?;
-        let DecoderState { decoder, rgb } = &mut *state;
-        let Some(decoded_frame) = decoder
-            .decode(&data)
-            .map_err(|error| MirrorError::Decode(error.to_string()))?
-        else {
-            return Ok(None);
-        };
-        if !emit_frame {
-            return Ok(None);
-        }
-
-        let (width, height) = decoded_frame.dimensions();
-        let rgba_len = width
+        let width = usize::try_from(frame.width)
+            .map_err(|_| MirrorError::Frame("decoded width exceeds usize".to_owned()))?;
+        let height = usize::try_from(frame.height)
+            .map_err(|_| MirrorError::Frame("decoded height exceeds usize".to_owned()))?;
+        let expected_rgba_bytes = width
             .checked_mul(height)
             .and_then(|pixels| pixels.checked_mul(4))
             .ok_or_else(|| {
                 MirrorError::Frame("decoded dimensions overflow memory size".to_owned())
             })?;
-        if rgba_len > MAX_VIDEO_PACKET_SIZE * 4 {
+        if frame.rgba.len() != expected_rgba_bytes {
             return Err(MirrorError::Frame(format!(
-                "decoded RGBA frame requires {rgba_len} bytes"
+                "decoded RGBA frame contains {} bytes, expected {expected_rgba_bytes}",
+                frame.rgba.len()
             )));
         }
-        rgb.resize(rgba_len, 0);
-        decoded_frame.write_rgba8(rgb);
-        let frame_width = u32::try_from(width)
-            .map_err(|_| MirrorError::Frame("decoded width exceeds u32".to_owned()))?;
-        let frame_height = u32::try_from(height)
-            .map_err(|_| MirrorError::Frame("decoded height exceeds u32".to_owned()))?;
-        Ok(Some(DecodedPixelFrame {
-            rgba: Bytes::copy_from_slice(rgb),
-            width: frame_width,
-            height: frame_height,
-        }))
+        let rgb_capacity = width
+            .checked_mul(height)
+            .and_then(|pixels| pixels.checked_mul(3))
+            .ok_or_else(|| {
+                MirrorError::Frame("decoded dimensions overflow memory size".to_owned())
+            })?;
+        let mut rgb = Vec::with_capacity(rgb_capacity);
+        for pixel in frame.rgba.chunks_exact(4) {
+            rgb.extend_from_slice(&pixel[..3]);
+        }
+        let mut jpeg = Vec::with_capacity(rgb_capacity / 8);
+        JpegEncoder::new_with_quality(&mut jpeg, preview_quality)
+            .encode(&rgb, frame.width, frame.height, ExtendedColorType::Rgb8)
+            .map_err(|error| MirrorError::Frame(error.to_string()))?;
+        Ok(MirrorFrame {
+            jpeg: Bytes::from(jpeg),
+            width: frame.width,
+            height: frame.height,
+            presentation_time_us: frame.presentation_time_us,
+            key_frame: frame.key_frame,
+        })
     })
     .await
-    .map_err(|error| MirrorError::Decode(format!("video decode worker failed: {error}")))?
-}
-
-fn preview_is_due(
-    last_preview_at: Option<Instant>,
-    now: Instant,
-    minimum_interval: Duration,
-) -> bool {
-    last_preview_at.is_none_or(|last| now.saturating_duration_since(last) >= minimum_interval)
+    .map_err(|error| MirrorError::Frame(format!("preview encode worker failed: {error}")))?
 }
 
 /// Finger lifecycle action sent to Android.
@@ -570,64 +495,6 @@ pub enum MirrorTouchAction {
     Move,
     /// Finish a touch gesture.
     Up,
-}
-
-struct VideoStreamReader {
-    stream: AdbStream,
-    buffered: BytesMut,
-    device_name: String,
-    width: u32,
-    height: u32,
-    last_preview_at: Option<Instant>,
-}
-
-impl VideoStreamReader {
-    async fn open(stream: AdbStream) -> Result<Self, MirrorError> {
-        let mut reader = Self {
-            stream,
-            buffered: BytesMut::new(),
-            device_name: String::new(),
-            width: 0,
-            height: 0,
-            last_preview_at: None,
-        };
-        let name = reader.read_exact(DEVICE_NAME_LENGTH).await?;
-        reader.device_name = parse_device_name(&name)?;
-        let mut codec = reader.read_exact(4).await?;
-        let codec_id = codec.get_u32();
-        if codec_id != H264_CODEC_ID {
-            return Err(MirrorError::Protocol(format!(
-                "unsupported video codec id 0x{codec_id:08x}"
-            )));
-        }
-        Ok(reader)
-    }
-
-    async fn next_packet(&mut self) -> Result<VideoPacket, MirrorError> {
-        let header = self.read_exact(VIDEO_HEADER_LENGTH).await?;
-        let payload = match video_payload_length(&header)? {
-            Some(length) => Some(self.read_exact(length).await?),
-            None => None,
-        };
-        parse_video_header(&header, payload)
-    }
-
-    async fn read_exact(&mut self, length: usize) -> Result<Bytes, MirrorError> {
-        while self.buffered.len() < length {
-            let Some(payload) = self.stream.read().await? else {
-                return Err(MirrorError::Protocol(
-                    "video stream closed before a complete field arrived".to_owned(),
-                ));
-            };
-            self.buffered.extend_from_slice(&payload);
-            if self.buffered.len() > MAX_VIDEO_PACKET_SIZE + self.stream.max_payload() {
-                return Err(MirrorError::Protocol(
-                    "video receive buffer exceeded its limit".to_owned(),
-                ));
-            }
-        }
-        Ok(self.buffered.split_to(length).freeze())
-    }
 }
 
 fn next_scid() -> u32 {
@@ -671,9 +538,15 @@ mod tests {
     }
 
     #[test]
-    fn mirror_options_reject_unbounded_values() {
+    fn mirror_options_accept_native_size_and_reject_unbounded_values() {
         let options = MirrorOptions {
             max_size: 0,
+            ..MirrorOptions::default()
+        };
+        assert!(options.validate().is_ok());
+
+        let options = MirrorOptions {
+            max_size: 128,
             ..MirrorOptions::default()
         };
         assert!(options.validate().is_err());
@@ -693,19 +566,5 @@ mod tests {
         };
         let command = server_command(1, options);
         assert!(command.contains("display_id=2"));
-    }
-
-    #[test]
-    fn preview_interval_skips_early_frames_and_accepts_the_boundary() {
-        let last = Instant::now();
-        let interval = Duration::from_millis(33);
-
-        assert!(preview_is_due(None, last, interval));
-        assert!(!preview_is_due(
-            Some(last),
-            last + Duration::from_millis(32),
-            interval
-        ));
-        assert!(preview_is_due(Some(last), last + interval, interval));
     }
 }

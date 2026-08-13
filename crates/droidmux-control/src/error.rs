@@ -26,7 +26,7 @@ pub enum MirrorError {
     /// The server sent malformed or unsupported protocol data.
     #[error("invalid screen protocol data: {0}")]
     Protocol(String),
-    /// `OpenH264` could not initialize or decode a video packet.
+    /// The selected decoder backend could not initialize or decode a video packet.
     #[error("H.264 decode failed: {0}")]
     Decode(String),
     /// A decoded frame could not be converted to a desktop preview.

@@ -59,6 +59,7 @@ subtle = "2.6.1"
 
 # Optional screen control.
 openh264 = "0.9.7"
+ffmpeg-next = { version = "9.0.0", default-features = false, features = ["codec", "format", "software-scaling"] }
 image = { version = "=0.25.9", default-features = false, features = ["jpeg"] }
 
 [workspace.lints.rust]
