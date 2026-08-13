@@ -12,20 +12,26 @@ use adb_sync::{
     SyncError, TransferCompression, TransferOptions, pull_file_with_options, push_file_with_options,
 };
 use tokio::io::AsyncReadExt;
+use tokio::time::{Duration, timeout};
 
 use crate::{
     AndroidPackage, InstallOptions, PackageDetails, PackageError, PackageKind, PackageListScope,
     PackageTransferCancellation, PackageTransferProgress,
+    jdwp::kill_debuggable_process,
     parse::{parse_apk_paths, parse_package_details, parse_package_list},
 };
 
 const PACKAGE_NAME_MAX: usize = 255;
 const COMMAND_OUTPUT_MAX: usize = 16 * 1024 * 1024;
 const PROCESS_LIST_COMMAND: &str = "ps -A -o PID,NAME";
+const LEGACY_PROCESS_LIST_COMMAND: &str = "ps";
 const MATCHED_PROCESS_MAX: usize = 64;
+const PROCESS_KILL_TIMEOUT: Duration = Duration::from_secs(2);
+const PROCESS_EXIT_WAIT: Duration = Duration::from_millis(150);
 const SESSION_APK_MAX: usize = 1024;
 const INSTALL_BUFFER_SIZE: usize = 64 * 1024;
 static INSTALL_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static LEGACY_COMMAND_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 struct SessionApk {
     path: PathBuf,
@@ -131,25 +137,56 @@ impl<'a> PackageManager<'a> {
         Ok(())
     }
 
-    /// Force-kills running processes whose names belong to a package.
+    /// Kills running processes without placing the package in a force-stopped state.
     ///
-    /// This resolves the package's main process and `package:child` processes,
-    /// then sends `SIGKILL` by PID. Android does not place the package into the
-    /// stopped state, so system services may start it again immediately.
+    /// Debuggable processes receive the same DDMS `EXIT` request used by
+    /// Android Studio. Other processes fall back to `ActivityManager` and, on
+    /// rooted or userdebug devices, a direct `SIGKILL`. Android may restart a
+    /// service immediately because this operation does not force-stop it.
     ///
     /// # Errors
     ///
     /// Returns an error for invalid names or a rejected Android command.
     pub async fn kill(&self, package_name: &str) -> Result<(), PackageError> {
         validate_package_name(package_name)?;
-        let process_list = self.run_checked(PROCESS_LIST_COMMAND).await?;
-        let process_ids = parse_package_process_ids(&process_list.stdout, package_name)?;
+        let process_ids = self.package_process_ids(package_name).await?;
         if process_ids.is_empty() {
             return Err(PackageError::ProcessNotFound(package_name.to_owned()));
         }
-        self.run_checked(&kill_process_command(&process_ids))
-            .await?;
-        Ok(())
+        for process_id in &process_ids {
+            let _ = timeout(
+                PROCESS_KILL_TIMEOUT,
+                kill_debuggable_process(self.client, *process_id),
+            )
+            .await;
+        }
+        if self
+            .original_processes_exited(package_name, &process_ids)
+            .await?
+        {
+            return Ok(());
+        }
+
+        let _ = self
+            .run_checked(&activity_manager_kill_command(package_name))
+            .await;
+        if self
+            .original_processes_exited(package_name, &process_ids)
+            .await?
+        {
+            return Ok(());
+        }
+
+        let _ = self.run_checked(&kill_process_command(&process_ids)).await;
+        if self
+            .original_processes_exited(package_name, &process_ids)
+            .await?
+        {
+            return Ok(());
+        }
+        Err(PackageError::ProcessKillDenied {
+            package_name: package_name.to_owned(),
+        })
     }
 
     /// Uninstalls a package after confirmation has been handled by the caller.
@@ -433,6 +470,26 @@ impl<'a> PackageManager<'a> {
             Err(PackageError::CommandFailed(output.failure_detail()))
         }
     }
+
+    async fn package_process_ids(&self, package_name: &str) -> Result<Vec<u32>, PackageError> {
+        let output = match self.run_checked(PROCESS_LIST_COMMAND).await {
+            Ok(output) => output,
+            Err(_) => self.run_checked(LEGACY_PROCESS_LIST_COMMAND).await?,
+        };
+        parse_package_process_ids(&output.stdout, package_name)
+    }
+
+    async fn original_processes_exited(
+        &self,
+        package_name: &str,
+        original_process_ids: &[u32],
+    ) -> Result<bool, PackageError> {
+        tokio::time::sleep(PROCESS_EXIT_WAIT).await;
+        let running = self.package_process_ids(package_name).await?;
+        Ok(!running
+            .iter()
+            .any(|process_id| original_process_ids.contains(process_id)))
+    }
 }
 
 struct CommandOutput {
@@ -465,8 +522,52 @@ async fn run_bounded_command(
     } else {
         ShellOptions::legacy()
     };
-    let session = Arc::new(open_shell(client, command, options).await?);
-    collect_command_output(session).await
+    if options.use_v2 {
+        let session = Arc::new(open_shell(client, command, options).await?);
+        collect_command_output(session).await
+    } else {
+        let marker = legacy_exit_marker();
+        let wrapped = wrap_legacy_command(command, &marker);
+        let session = Arc::new(open_shell(client, &wrapped, options).await?);
+        let mut output = collect_command_output(session).await?;
+        output.exit_code = Some(parse_legacy_exit_code(&mut output.stdout, &marker)?);
+        Ok(output)
+    }
+}
+
+fn legacy_exit_marker() -> String {
+    let sequence = LEGACY_COMMAND_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("__DROIDMUX_EXIT_{sequence:016x}__")
+}
+
+fn wrap_legacy_command(command: &str, marker: &str) -> String {
+    format!("{command}\n__droidmux_exit=$?\nprintf '\\n{marker}%s\\n' \"$__droidmux_exit\"")
+}
+
+fn parse_legacy_exit_code(output: &mut String, marker: &str) -> Result<u8, PackageError> {
+    let marker_start = output.rfind(marker).ok_or_else(|| {
+        PackageError::InvalidResponse("legacy shell response omitted the exit status".to_owned())
+    })?;
+    let status_start = marker_start + marker.len();
+    let status_end = output[status_start..]
+        .find(['\r', '\n'])
+        .map_or(output.len(), |offset| status_start + offset);
+    let trailing = output[status_end..].trim_matches(['\r', '\n']);
+    if !trailing.is_empty() {
+        return Err(PackageError::InvalidResponse(
+            "legacy shell response contained data after the exit status".to_owned(),
+        ));
+    }
+    let status = output[status_start..status_end]
+        .parse::<u8>()
+        .map_err(|_| {
+            PackageError::InvalidResponse("legacy shell exit status is invalid".to_owned())
+        })?;
+    let content_end = output[..marker_start]
+        .strip_suffix('\n')
+        .map_or(marker_start, str::len);
+    output.truncate(content_end);
+    Ok(status)
 }
 
 async fn collect_command_output(session: Arc<ShellSession>) -> Result<CommandOutput, PackageError> {
@@ -669,7 +770,6 @@ fn expect_success(output: &CommandOutput, operation: &str) -> Result<(), Package
 fn validate_package_name(package_name: &str) -> Result<(), PackageError> {
     let valid = !package_name.is_empty()
         && package_name.len() <= PACKAGE_NAME_MAX
-        && package_name.contains('.')
         && package_name
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_'));
@@ -686,6 +786,10 @@ fn shell_quote(value: &str) -> String {
 
 fn force_stop_command(package_name: &str) -> String {
     format!("am force-stop --user current {}", shell_quote(package_name))
+}
+
+fn activity_manager_kill_command(package_name: &str) -> String {
+    format!("am kill --user current {}", shell_quote(package_name))
 }
 
 fn parse_package_process_ids(output: &str, package_name: &str) -> Result<Vec<u32>, PackageError> {
@@ -756,9 +860,10 @@ mod tests {
     use crate::PackageError;
 
     use super::{
-        CommandOutput, expect_session_success, force_stop_command, install_create_command,
-        kill_process_command, parse_install_session_id, parse_package_process_ids, shell_quote,
-        validate_package_name,
+        CommandOutput, activity_manager_kill_command, expect_session_success, force_stop_command,
+        install_create_command, kill_process_command, parse_install_session_id,
+        parse_legacy_exit_code, parse_package_process_ids, shell_quote, validate_package_name,
+        wrap_legacy_command,
     };
 
     #[test]
@@ -768,7 +873,7 @@ mod tests {
             validate_package_name("com.example.app;reboot"),
             Err(PackageError::InvalidPackageName(_))
         ));
-        assert!(validate_package_name("android").is_err());
+        assert!(validate_package_name("android").is_ok());
     }
 
     #[test]
@@ -781,6 +886,10 @@ mod tests {
         assert_eq!(
             force_stop_command("com.example.app"),
             "am force-stop --user current 'com.example.app'"
+        );
+        assert_eq!(
+            activity_manager_kill_command("com.example.app"),
+            "am kill --user current 'com.example.app'"
         );
         assert_eq!(kill_process_command(&[123, 456]), "kill -9 123 456");
     }
@@ -828,5 +937,38 @@ mod tests {
             exit_code: Some(1),
         };
         assert!(expect_session_success(&output, "install-write").is_err());
+    }
+
+    #[test]
+    fn legacy_command_wrapper_recovers_success_failure_and_stdout() {
+        let marker = "__DROIDMUX_EXIT_test__";
+        assert_eq!(
+            wrap_legacy_command("pm list packages", marker),
+            "pm list packages\n__droidmux_exit=$?\nprintf '\\n__DROIDMUX_EXIT_test__%s\\n' \"$__droidmux_exit\""
+        );
+
+        let mut success = format!("package:one\npackage:two\n\n{marker}0\n");
+        assert_eq!(
+            parse_legacy_exit_code(&mut success, marker).expect("status should parse"),
+            0
+        );
+        assert_eq!(success, "package:one\npackage:two\n");
+
+        let mut failure = format!("Unknown option: -o\n\n{marker}1\n");
+        assert_eq!(
+            parse_legacy_exit_code(&mut failure, marker).expect("status should parse"),
+            1
+        );
+        assert_eq!(failure, "Unknown option: -o\n");
+    }
+
+    #[test]
+    fn legacy_exit_parser_rejects_missing_or_ambiguous_status() {
+        let marker = "__DROIDMUX_EXIT_test__";
+        let mut missing = "command output".to_owned();
+        assert!(parse_legacy_exit_code(&mut missing, marker).is_err());
+
+        let mut trailing = format!("output\n{marker}0\nunexpected");
+        assert!(parse_legacy_exit_code(&mut trailing, marker).is_err());
     }
 }

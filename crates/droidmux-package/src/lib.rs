@@ -4,6 +4,7 @@
 //! command-line program or ADB server is invoked.
 
 mod error;
+mod jdwp;
 mod manager;
 mod model;
 mod parse;

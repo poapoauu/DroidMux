@@ -77,6 +77,14 @@ pub enum PackageError {
     /// No running process matched the selected package name.
     #[error("未找到 {0} 正在运行的进程")]
     ProcessNotFound(String),
+    /// Android protected a process from all non-force-stop kill strategies.
+    #[error(
+        "Android 拒绝终止 {package_name} 的进程；该进程可能不可调试或由系统保护，请使用“停止应用”"
+    )]
+    ProcessKillDenied {
+        /// Package whose original processes remain alive.
+        package_name: String,
+    },
     /// Installation was canceled while uploading the APK.
     #[error("APK installation was canceled")]
     Canceled,
