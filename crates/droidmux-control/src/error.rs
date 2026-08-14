@@ -27,7 +27,7 @@ pub enum MirrorError {
     #[error("invalid screen protocol data: {0}")]
     Protocol(String),
     /// The selected decoder backend could not initialize or decode a video packet.
-    #[error("H.264 decode failed: {0}")]
+    #[error("video decode failed: {0}")]
     Decode(String),
     /// A decoded frame could not be converted to a desktop preview.
     #[error("frame conversion failed: {0}")]

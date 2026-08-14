@@ -24,18 +24,19 @@ licensed under Apache-2.0. Its unmodified license is stored at
 `crates/droidmux-control/LICENSE-SCRCPY` and must remain with distributions
 containing the server.
 
-The optional screen decoder builds `openh264` from source under BSD-2-Clause.
+The default H.264 screen decoder builds `openh264` from source under BSD-2-Clause.
 That copyright license does not grant patent rights. Cisco's patent coverage
 for Cisco-distributed binary modules does not automatically cover third-party
 source builds, so public or commercial binary distribution requires a separate
 H.264 patent review for relevant jurisdictions.
 
-The `decoder-ffmpeg` feature is opt-in and links FFmpeg libraries supplied by
+The `decoder-ffmpeg` feature supplies H.264, H.265/HEVC, and AV1 decoding. It is opt-in and links FFmpeg libraries supplied by
 the SDK consumer; DroidMux does not bundle them or execute `ffmpeg`. Consumers
 must select an FFmpeg build whose enabled components and LGPL/GPL configuration
 match their distribution model, retain its notices, and comply with dynamic- or
 static-linking obligations. Enabling the backend does not change DroidMux-owned
-source code from `MIT OR Apache-2.0`.
+source code from `MIT OR Apache-2.0`. H.265/HEVC distribution may require a
+separate patent-license review in addition to FFmpeg copyright compliance.
 
 Protocol behavior was compared with Apache-2.0 projects scrcpy, Kadb, and Dadb.
 SkyADB is GPL-3.0 and was used only as a behavioral reference. No SkyADB source
@@ -49,7 +50,7 @@ is included, so DroidMux is not a derivative of that project.
 3. Include `crates/droidmux-control/LICENSE-SCRCPY` when distributing the
    `control` assets.
 4. Generate a dependency license inventory from the release lockfile.
-5. Review H.264 patent obligations before distributing binaries with `control`.
+5. Review H.264 and H.265/HEVC patent obligations before distributing binaries with `control`.
 6. When enabling `decoder-ffmpeg`, record the exact FFmpeg build configuration,
    libraries, notices, and linking method included in the distributed binary.
 

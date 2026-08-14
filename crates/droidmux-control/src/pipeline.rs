@@ -17,9 +17,9 @@ use tokio::{
 
 use crate::{
     DecodedPixelFormat, DecodedVideoFrame, MirrorDecoder, MirrorError, MirrorPixelBuffer,
-    VideoFrameMetadata,
+    VideoCodec, VideoFrameMetadata,
     protocol::{
-        DEVICE_NAME_LENGTH, H264_CODEC_ID, MAX_VIDEO_PACKET_SIZE, VIDEO_HEADER_LENGTH, VideoPacket,
+        DEVICE_NAME_LENGTH, MAX_VIDEO_PACKET_SIZE, VIDEO_HEADER_LENGTH, VideoPacket,
         parse_device_name, parse_video_header, video_payload_length,
     },
 };
@@ -31,7 +31,7 @@ const MAX_PIXEL_FRAME_BYTES: usize = MAX_VIDEO_PACKET_SIZE * 4;
 /// Cumulative counters for one mirror session's native video pipeline.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MirrorPipelineStats {
-    /// Encoded H.264 frame packets submitted to the decoder.
+    /// Encoded video frame packets submitted to the decoder.
     pub encoded_frames: u64,
     /// CPU pixel frames produced by the decoder.
     pub decoded_frames: u64,
@@ -593,7 +593,10 @@ pub(crate) struct VideoStreamReader {
 }
 
 impl VideoStreamReader {
-    pub(crate) async fn open(stream: AdbStream) -> Result<Self, MirrorError> {
+    pub(crate) async fn open(
+        stream: AdbStream,
+        expected_codec: VideoCodec,
+    ) -> Result<Self, MirrorError> {
         let mut reader = Self {
             stream,
             buffered: BytesMut::new(),
@@ -603,9 +606,14 @@ impl VideoStreamReader {
         reader.device_name = parse_device_name(&name)?;
         let mut codec = reader.read_exact(4).await?;
         let codec_id = codec.get_u32();
-        if codec_id != H264_CODEC_ID {
+        let video_codec = VideoCodec::from_codec_id(codec_id).ok_or_else(|| {
+            MirrorError::Protocol(format!("unsupported video codec id 0x{codec_id:08x}"))
+        })?;
+        if video_codec != expected_codec {
             return Err(MirrorError::Protocol(format!(
-                "unsupported video codec id 0x{codec_id:08x}"
+                "video server returned codec {}, expected {}",
+                video_codec.scrcpy_name(),
+                expected_codec.scrcpy_name()
             )));
         }
         Ok(reader)

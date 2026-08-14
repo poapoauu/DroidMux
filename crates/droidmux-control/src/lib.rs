@@ -21,6 +21,7 @@ pub use error::MirrorError;
 #[cfg(feature = "decoder-ffmpeg")]
 pub use ffmpeg_decoder::FfmpegDecoder;
 pub use pipeline::MirrorPipelineStats;
+pub use protocol::VideoCodec;
 pub use session::{
     AndroidKey, MirrorFrame, MirrorOptions, MirrorPixelBuffer, MirrorPixelFrame, MirrorSession,
     MirrorTouchAction,

@@ -166,7 +166,7 @@ database, or application-framework dependency, and lower-level crates can be use
 | Services | `droidmux-shell`, `droidmux-sync`, `droidmux-package` | Shell, files, and package management |
 | Observability | `droidmux-logcat`, `droidmux-screenshot` | Logs and screenshots |
 | Networking | `droidmux-forward` | Local and reverse forwarding services |
-| Screen | `droidmux-control` | scrcpy-server sessions, H.264 decoding, and input injection |
+| Screen | `droidmux-control` | scrcpy-server sessions, H.264/H.265/AV1 decoding, and input injection |
 
 ## Security Boundary
 
@@ -199,8 +199,8 @@ Unimplemented features are not advertised in the host CNXN feature list.
 ## Optional Screen Control
 
 The `control` feature includes and uploads the Apache-2.0-licensed Android `scrcpy-server`
-component, but it does not execute the scrcpy desktop client. Video is decoded with an
-`openh264` source build.
+component, but it does not execute the scrcpy desktop client. H.264 video is decoded by default
+with an `openh264` source build.
 
 `droidmux-control` enables its `decoder-openh264` feature by default. Applications can disable
 that feature and pass another implementation of the public `MirrorDecoder` trait to
@@ -221,14 +221,18 @@ SDK that `ffmpeg-sys-next` can discover:
 droidmux-control = { git = "https://github.com/poapoauu/DroidMux", default-features = false, features = ["decoder-ffmpeg"] }
 ```
 
-Create an `FfmpegDecoder` and pass it to `MirrorSession::start_with_decoder`. The application is
-responsible for shipping compatible FFmpeg shared libraries and notices. Enabling both decoder
-features is supported when runtime backend selection is required.
+Set `MirrorOptions::video_codec` to `VideoCodec::H265` or `VideoCodec::Av1`, create the matching
+decoder with `FfmpegDecoder::for_codec`, and pass it to
+`MirrorSession::start_with_decoder`. `FfmpegDecoder::new` remains the H.264-compatible constructor.
+The session validates that the requested encoder, the codec announced by scrcpy-server, and the
+decoder instance agree. The application is responsible for shipping compatible FFmpeg shared
+libraries and notices. Enabling both decoder features is supported when runtime backend selection
+is required; `OpenH264Decoder` accepts H.264 only.
 
 OpenH264 is BSD-2-Clause licensed, but that copyright license does not grant H.264 patent
-rights. Review patent obligations in the target jurisdictions before publicly or commercially
-distributing a binary with the `control` feature. Disable `control` when only ADB protocol
-capabilities are needed.
+rights. H.265/HEVC may carry separate patent-pool obligations. Review codec patent obligations
+in the target jurisdictions before publicly or commercially distributing a binary with the
+`control` feature. Disable `control` when only ADB protocol capabilities are needed.
 
 `PackageManager::force_stop` and `PackageManager::kill` intentionally have different Android
 semantics. `force_stop` prevents normal restart until the package is explicitly launched again.

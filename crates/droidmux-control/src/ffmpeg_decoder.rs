@@ -9,7 +9,8 @@ use ffmpeg_next::{
 };
 
 use crate::{
-    DecodedPixelFormat, DecodedVideoFrame, MirrorDecoder, MirrorError, VideoFrameMetadata,
+    DecodedPixelFormat, DecodedVideoFrame, MirrorDecoder, MirrorError, VideoCodec,
+    VideoFrameMetadata,
     decoder::{MAX_DECODED_FRAME_BYTES, PixelBufferPool, RETAINED_PIXEL_BUFFERS},
 };
 
@@ -30,11 +31,12 @@ struct CachedScaler {
     height: u32,
 }
 
-/// FFmpeg-backed software decoder for H.264 mirror streams.
+/// FFmpeg-backed software decoder for H.264, H.265, and AV1 mirror streams.
 ///
 /// This backend is available only with the `decoder-ffmpeg` feature. It links
 /// to `FFmpeg` libraries selected at build time and never starts `ffmpeg.exe`.
 pub struct FfmpegDecoder {
+    video_codec: VideoCodec,
     decoder: codec::decoder::Video,
     decoded: Video,
     converted: Video,
@@ -51,22 +53,39 @@ impl FfmpegDecoder {
     ///
     /// Returns an error when `FFmpeg` cannot initialize or does not expose H.264.
     pub fn new() -> Result<Self, MirrorError> {
+        Self::for_codec(VideoCodec::H264)
+    }
+
+    /// Creates an `FFmpeg` decoder for the requested mirror video codec.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `FFmpeg` cannot initialize or does not expose the
+    /// requested decoder.
+    pub fn for_codec(video_codec: VideoCodec) -> Result<Self, MirrorError> {
         FFMPEG_INITIALIZATION
             .get_or_init(|| ffmpeg_next::init().map_err(|error| error.to_string()))
             .as_ref()
             .map_err(|error| {
                 MirrorError::Decode(format!("FFmpeg initialization failed: {error}"))
             })?;
-        let codec = codec::decoder::find(codec::Id::H264).ok_or_else(|| {
-            MirrorError::Decode("FFmpeg does not provide an H.264 decoder".to_owned())
+        let codec_id = match video_codec {
+            VideoCodec::H264 => codec::Id::H264,
+            VideoCodec::H265 => codec::Id::HEVC,
+            VideoCodec::Av1 => codec::Id::AV1,
+        };
+        let codec_name = video_codec.scrcpy_name();
+        let codec = codec::decoder::find(codec_id).ok_or_else(|| {
+            MirrorError::Decode(format!("FFmpeg does not provide a {codec_name} decoder"))
         })?;
         let decoder = codec::Context::new_with_codec(codec)
             .decoder()
             .video()
             .map_err(|error| {
-                MirrorError::Decode(format!("FFmpeg H.264 decoder setup failed: {error}"))
+                MirrorError::Decode(format!("FFmpeg {codec_name} decoder setup failed: {error}"))
             })?;
         Ok(Self {
+            video_codec,
             decoder,
             decoded: Video::empty(),
             converted: Video::empty(),
@@ -93,9 +112,18 @@ impl FfmpegDecoder {
                     )));
                 }
             }
-            let metadata = self.pending_metadata.pop_front().ok_or_else(|| {
-                MirrorError::Decode("FFmpeg emitted a frame without queued metadata".to_owned())
-            })?;
+            let decoded_pts = self.decoded.pts();
+            let metadata_index = decoded_pts.and_then(|pts| {
+                self.pending_metadata.iter().position(|metadata| {
+                    i64::try_from(metadata.presentation_time_us).ok() == Some(pts)
+                })
+            });
+            let metadata = metadata_index
+                .and_then(|index| self.pending_metadata.remove(index))
+                .or_else(|| self.pending_metadata.pop_front())
+                .ok_or_else(|| {
+                    MirrorError::Decode("FFmpeg emitted a frame without queued metadata".to_owned())
+                })?;
             let Some(format) = output else {
                 continue;
             };
@@ -205,6 +233,10 @@ impl MirrorDecoder for FfmpegDecoder {
         "ffmpeg"
     }
 
+    fn video_codec(&self) -> VideoCodec {
+        self.video_codec
+    }
+
     fn decode(
         &mut self,
         access_unit: &[u8],
@@ -213,6 +245,16 @@ impl MirrorDecoder for FfmpegDecoder {
         emit: &mut dyn FnMut(DecodedVideoFrame),
     ) -> Result<(), MirrorError> {
         let Some(metadata) = metadata else {
+            if self.video_codec == VideoCodec::Av1 {
+                self.decoder
+                    .send_packet(&Packet::copy(access_unit))
+                    .map_err(|error| {
+                        MirrorError::Decode(format!(
+                            "FFmpeg AV1 configuration packet submission failed: {error}"
+                        ))
+                    })?;
+                return self.receive_frames(None, emit);
+            }
             self.pending_config.clear();
             self.pending_config.extend_from_slice(access_unit);
             return Ok(());
@@ -227,20 +269,21 @@ impl MirrorDecoder for FfmpegDecoder {
             combined.extend_from_slice(access_unit);
             combined
         };
-        self.decoder
-            .send_packet(&Packet::copy(&packet_data))
-            .map_err(|error| {
-                let prefix = packet_data
-                    .iter()
-                    .take(16)
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                MirrorError::Decode(format!(
-                    "FFmpeg frame packet submission failed: {error}; length={}; prefix={prefix}",
-                    packet_data.len()
-                ))
-            })?;
+        let mut packet = Packet::copy(&packet_data);
+        let timestamp = i64::try_from(metadata.presentation_time_us).ok();
+        packet.set_pts(timestamp);
+        self.decoder.send_packet(&packet).map_err(|error| {
+            let prefix = packet_data
+                .iter()
+                .take(16)
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            MirrorError::Decode(format!(
+                "FFmpeg frame packet submission failed: {error}; length={}; prefix={prefix}",
+                packet_data.len()
+            ))
+        })?;
         self.pending_config.clear();
         self.pending_metadata.push_back(metadata);
         self.receive_frames(output, emit)

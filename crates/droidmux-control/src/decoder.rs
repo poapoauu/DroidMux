@@ -8,9 +8,9 @@ use bytes::Bytes;
 #[cfg(feature = "decoder-openh264")]
 use openh264::{decoder::Decoder, formats::YUVSource};
 
-use crate::MirrorError;
 #[cfg(any(feature = "decoder-openh264", feature = "decoder-ffmpeg"))]
 use crate::protocol::MAX_VIDEO_PACKET_SIZE;
+use crate::{MirrorError, VideoCodec};
 
 #[cfg(any(feature = "decoder-openh264", feature = "decoder-ffmpeg"))]
 pub(crate) const RETAINED_PIXEL_BUFFERS: usize = 3;
@@ -79,6 +79,11 @@ pub struct DecodedVideoFrame {
 pub trait MirrorDecoder: Send + 'static {
     /// Returns a stable diagnostic name for this backend.
     fn backend_name(&self) -> &'static str;
+
+    /// Returns the encoded video format accepted by this decoder instance.
+    fn video_codec(&self) -> VideoCodec {
+        VideoCodec::H264
+    }
 
     /// Submits one encoded access unit and optionally materializes CPU pixels.
     ///

@@ -13,7 +13,7 @@ use tokio::{task::spawn_blocking, time::sleep};
 #[cfg(feature = "decoder-openh264")]
 use crate::OpenH264Decoder;
 use crate::{
-    DecodedPixelFormat, MirrorDecoder, MirrorError, MirrorPipelineStats,
+    DecodedPixelFormat, MirrorDecoder, MirrorError, MirrorPipelineStats, VideoCodec,
     pipeline::{VideoPipeline, VideoStreamReader},
     protocol::{TouchAction, encode_key, encode_touch},
 };
@@ -47,13 +47,15 @@ pub enum AndroidKey {
 pub struct MirrorOptions {
     /// Android logical display identifier to capture and control.
     pub display_id: u32,
+    /// Video codec requested from the Android encoder.
+    pub video_codec: VideoCodec,
     /// Maximum encoded frame dimension. Zero preserves the native display size.
     pub max_size: u16,
     /// Maximum frames requested from the Android encoder each second.
     pub max_fps: u8,
-    /// Requested H.264 bit rate.
+    /// Requested encoded video bit rate.
     pub video_bit_rate: u32,
-    /// JPEG quality used for the Dioxus preview bridge.
+    /// JPEG quality used by callers of the compatibility preview API.
     pub preview_quality: u8,
 }
 
@@ -61,6 +63,7 @@ impl Default for MirrorOptions {
     fn default() -> Self {
         Self {
             display_id: 0,
+            video_codec: VideoCodec::H264,
             max_size: 1280,
             max_fps: 15,
             video_bit_rate: 4_000_000,
@@ -111,7 +114,7 @@ pub struct MirrorFrame {
     pub height: u32,
     /// Device encoder presentation timestamp in microseconds.
     pub presentation_time_us: u64,
-    /// Whether the source packet was an H.264 key frame.
+    /// Whether the source packet was a key frame.
     pub key_frame: bool,
 }
 
@@ -130,7 +133,7 @@ pub struct MirrorPixelFrame {
     pub height: u32,
     /// Device encoder presentation timestamp in microseconds.
     pub presentation_time_us: u64,
-    /// Whether the source packet was an H.264 key frame.
+    /// Whether the source packet was a key frame.
     pub key_frame: bool,
 }
 
@@ -150,7 +153,7 @@ pub struct MirrorPixelBuffer {
     pub format: DecodedPixelFormat,
     /// Device encoder presentation timestamp in microseconds.
     pub presentation_time_us: u64,
-    /// Whether the source packet was an H.264 key frame.
+    /// Whether the source packet was a key frame.
     pub key_frame: bool,
 }
 
@@ -196,6 +199,14 @@ impl MirrorSession {
         decoder: Box<dyn MirrorDecoder>,
     ) -> Result<Self, MirrorError> {
         let options = options.validate()?;
+        if decoder.video_codec() != options.video_codec {
+            return Err(MirrorError::InvalidInput(format!(
+                "decoder {} accepts {}, but mirror options request {}",
+                decoder.backend_name(),
+                decoder.video_codec().scrcpy_name(),
+                options.video_codec.scrcpy_name()
+            )));
+        }
         let transfer_options = TransferOptions {
             file_mode: 0o644,
             ..TransferOptions::default()
@@ -230,7 +241,7 @@ impl MirrorSession {
             }
         };
 
-        let video = match VideoStreamReader::open(video_stream.clone()).await {
+        let video = match VideoStreamReader::open(video_stream.clone(), options.video_codec).await {
             Ok(reader) => reader,
             Err(error) => {
                 let _ = control_stream.close().await;
@@ -274,7 +285,7 @@ impl MirrorSession {
     ///
     /// # Errors
     ///
-    /// Returns an error when the stream closes, framing is invalid, H.264
+    /// Returns an error when the stream closes, framing is invalid, video
     /// decoding fails, or JPEG conversion fails.
     pub async fn next_frame(&self) -> Result<MirrorFrame, MirrorError> {
         self.next_preview_frame(Duration::ZERO).await
@@ -282,7 +293,7 @@ impl MirrorSession {
 
     /// Waits for the next decoded frame that is due for presentation.
     ///
-    /// Every H.264 packet is submitted to the long-lived decoder worker to
+    /// Every encoded packet is submitted to the long-lived decoder worker to
     /// preserve codec state. CPU pixel output is produced while a consumer is
     /// waiting, and JPEG encoding is limited by `minimum_interval`. The worker
     /// keeps codec and conversion work off the async executor.
@@ -503,8 +514,12 @@ fn next_scid() -> u32 {
 
 fn server_command(scid: u32, options: MirrorOptions) -> String {
     format!(
-        "CLASSPATH={DEVICE_SERVER_PATH} app_process / com.genymobile.scrcpy.Server {SCRCPY_VERSION} scid={scid:08x} log_level=warn audio=false display_id={} max_size={} max_fps={} video_bit_rate={} tunnel_forward=true send_dummy_byte=false cleanup=true",
-        options.display_id, options.max_size, options.max_fps, options.video_bit_rate
+        "CLASSPATH={DEVICE_SERVER_PATH} app_process / com.genymobile.scrcpy.Server {SCRCPY_VERSION} scid={scid:08x} log_level=warn audio=false video_codec={} display_id={} max_size={} max_fps={} video_bit_rate={} tunnel_forward=true send_dummy_byte=false cleanup=true",
+        options.video_codec.scrcpy_name(),
+        options.display_id,
+        options.max_size,
+        options.max_fps,
+        options.video_bit_rate
     )
 }
 
@@ -532,6 +547,7 @@ mod tests {
         assert!(command.contains("com.genymobile.scrcpy.Server 4.1"));
         assert!(command.contains("scid=1234abcd"));
         assert!(command.contains("audio=false"));
+        assert!(command.contains("video_codec=h264"));
         assert!(command.contains("display_id=0"));
         assert!(command.contains("tunnel_forward=true"));
         assert!(!command.contains('\n'));
@@ -566,5 +582,19 @@ mod tests {
         };
         let command = server_command(1, options);
         assert!(command.contains("display_id=2"));
+    }
+
+    #[test]
+    fn server_command_selects_h265_and_av1() {
+        for (video_codec, argument) in [
+            (VideoCodec::H265, "video_codec=h265"),
+            (VideoCodec::Av1, "video_codec=av1"),
+        ] {
+            let options = MirrorOptions {
+                video_codec,
+                ..MirrorOptions::default()
+            };
+            assert!(server_command(1, options).contains(argument));
+        }
     }
 }

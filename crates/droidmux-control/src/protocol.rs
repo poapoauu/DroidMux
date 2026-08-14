@@ -2,7 +2,47 @@ use bytes::{Buf, Bytes, BytesMut};
 
 use crate::MirrorError;
 
-pub(crate) const H264_CODEC_ID: u32 = 0x6832_3634;
+/// Video codec requested from and announced by the embedded scrcpy server.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum VideoCodec {
+    /// H.264/AVC, supported by every `DroidMux` decoder backend.
+    #[default]
+    H264,
+    /// H.265/HEVC, decoded through an HEVC-capable backend such as `FFmpeg`.
+    H265,
+    /// AV1, decoded through an AV1-capable backend such as `FFmpeg`.
+    Av1,
+}
+
+impl VideoCodec {
+    pub(crate) const fn scrcpy_name(self) -> &'static str {
+        match self {
+            Self::H264 => "h264",
+            Self::H265 => "h265",
+            Self::Av1 => "av1",
+        }
+    }
+
+    pub(crate) const fn codec_id(self) -> u32 {
+        match self {
+            Self::H264 => 0x6832_3634,
+            Self::H265 => 0x6832_3635,
+            Self::Av1 => 0x0061_7631,
+        }
+    }
+
+    pub(crate) const fn from_codec_id(codec_id: u32) -> Option<Self> {
+        if codec_id == Self::H264.codec_id() {
+            Some(Self::H264)
+        } else if codec_id == Self::H265.codec_id() {
+            Some(Self::H265)
+        } else if codec_id == Self::Av1.codec_id() {
+            Some(Self::Av1)
+        } else {
+            None
+        }
+    }
+}
 pub(crate) const DEVICE_NAME_LENGTH: usize = 64;
 pub(crate) const VIDEO_HEADER_LENGTH: usize = 12;
 pub(crate) const MAX_VIDEO_PACKET_SIZE: usize = 16 * 1024 * 1024;
@@ -235,5 +275,13 @@ mod tests {
         assert_eq!(encoded.len(), 14);
         assert_eq!(&encoded[..2], &[0, 0]);
         assert_eq!(&encoded[2..6], &3_u32.to_be_bytes());
+    }
+
+    #[test]
+    fn recognizes_scrcpy_video_codec_ids() {
+        for codec in [VideoCodec::H264, VideoCodec::H265, VideoCodec::Av1] {
+            assert_eq!(VideoCodec::from_codec_id(codec.codec_id()), Some(codec));
+        }
+        assert_eq!(VideoCodec::from_codec_id(u32::MAX), None);
     }
 }
