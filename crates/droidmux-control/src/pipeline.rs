@@ -783,7 +783,7 @@ mod tests {
         let output_format = Arc::new(AtomicU8::new(RGBA8888_OUTPUT));
         let worker_output_format = Arc::clone(&output_format);
         let (packet_sender, packet_receiver) = mpsc::channel(2);
-        let (frame_sender, frame_receiver) = watch::channel(PipelineEvent::Waiting);
+        let (frame_sender, mut frame_receiver) = watch::channel(PipelineEvent::Waiting);
         let decoder_thread = thread::spawn(move || {
             run_decoder_worker(
                 Box::new(FakeDecoder),
@@ -807,17 +807,23 @@ mod tests {
                 .expect("decoder worker should remain available");
         }
 
-        while counters.decoded_frames.load(Ordering::Relaxed) < 3 {
-            tokio::task::yield_now().await;
-        }
-        let latest = frame_receiver.borrow().clone();
-        let PipelineEvent::Frame {
-            frame,
-            sequence,
-            terminal: None,
-        } = latest
-        else {
-            panic!("latest event should contain a decoded frame");
+        let (frame, sequence) = loop {
+            frame_receiver
+                .changed()
+                .await
+                .expect("decoder worker should retain the frame sender");
+            let latest = frame_receiver.borrow_and_update().clone();
+            let PipelineEvent::Frame {
+                frame,
+                sequence,
+                terminal: None,
+            } = latest
+            else {
+                panic!("latest event should contain a decoded frame");
+            };
+            if sequence == 3 {
+                break (frame, sequence);
+            }
         };
         assert_eq!(sequence, 3);
         assert_eq!(frame.presentation_time_us, 3);
