@@ -362,6 +362,7 @@ dependencies = [
  "ffmpeg-next",
  "image",
  "openh264",
+ "rand",
  "thiserror",
  "tokio",
 ]

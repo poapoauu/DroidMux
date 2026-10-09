@@ -202,6 +202,12 @@ The `control` feature includes and uploads the Apache-2.0-licensed Android `scrc
 component, but it does not execute the scrcpy desktop client. H.264 video is decoded by default
 with an `openh264` source build.
 
+Each mirror session uses a process-randomized socket ID and its own uploaded server JAR path,
+so cleanup cannot remove a sibling session's server file. Server startup allows up to 300
+socket probes spaced 50 ms apart (plus transport time), and bounded server stdout/stderr is
+included in startup errors when available. Simultaneous displays still depend on Android's
+encoder and resource limits; an advertised display alone does not guarantee parallel capture.
+
 `droidmux-control` enables its `decoder-openh264` feature by default. Applications can disable
 that feature and pass another implementation of the public `MirrorDecoder` trait to
 `MirrorSession::start_with_decoder`. The session uses a bounded, long-lived decode pipeline and

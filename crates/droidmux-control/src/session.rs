@@ -1,4 +1,5 @@
 use std::{
+    sync::LazyLock,
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
     time::Duration,
 };
@@ -19,11 +20,11 @@ use crate::{
 };
 
 const SCRCPY_VERSION: &str = "4.1";
-const DEVICE_SERVER_PATH: &str = "/data/local/tmp/droidmux-scrcpy-server-v4.1.jar";
 const SERVER_BYTES: &[u8] = include_bytes!("../resources/scrcpy-server-v4.1");
-const SOCKET_ATTEMPTS: usize = 60;
+const SOCKET_ATTEMPTS: usize = 300;
 const SOCKET_RETRY_DELAY: Duration = Duration::from_millis(50);
-static NEXT_SCID: AtomicU32 = AtomicU32::new(0x0d10_0001);
+static NEXT_SCID: LazyLock<AtomicU32> =
+    LazyLock::new(|| AtomicU32::new(rand::random::<u32>() & 0x7fff_ffff));
 
 /// Android key codes exposed by the first remote-control milestone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,23 +212,30 @@ impl MirrorSession {
             file_mode: 0o644,
             ..TransferOptions::default()
         };
+        let scid = next_scid();
+        let server_path = device_server_path(scid);
         push_bytes_with_options(
             client,
             SERVER_BYTES,
-            DEVICE_SERVER_PATH,
+            &server_path,
             &transfer_options,
             |_| {},
         )
         .await?;
 
-        let scid = next_scid();
         let command = server_command(scid, options);
-        let server = open_shell(client, &command, ShellOptions::default()).await?;
+        let shell_options = if client.supports_feature("shell_v2") {
+            ShellOptions::default()
+        } else {
+            ShellOptions::legacy()
+        };
+        let server = open_shell(client, &command, shell_options).await?;
         let socket_name = format!("localabstract:scrcpy_{scid:08x}");
 
         let video_stream = match open_server_socket(client, &socket_name).await {
             Ok(stream) => stream,
             Err(error) => {
+                let error = startup_error_with_output(error, &server).await;
                 let _ = server.cancel().await;
                 return Err(error);
             }
@@ -235,6 +243,7 @@ impl MirrorSession {
         let control_stream = match open_server_socket(client, &socket_name).await {
             Ok(stream) => stream,
             Err(error) => {
+                let error = startup_error_with_output(error, &server).await;
                 let _ = video_stream.close().await;
                 let _ = server.cancel().await;
                 return Err(error);
@@ -512,9 +521,46 @@ fn next_scid() -> u32 {
     NEXT_SCID.fetch_add(1, Ordering::Relaxed) & 0x7fff_ffff
 }
 
+fn device_server_path(scid: u32) -> String {
+    format!("/data/local/tmp/droidmux-scrcpy-server-v{SCRCPY_VERSION}-{scid:08x}.jar")
+}
+
+async fn startup_error_with_output(error: MirrorError, server: &ShellSession) -> MirrorError {
+    let (stdout, stderr) = tokio::join!(server_output(server, false), server_output(server, true));
+    let detail = format!("{stdout}{stderr}");
+    if detail.trim().is_empty() {
+        error
+    } else {
+        MirrorError::Startup(format!("{error}; server: {}", detail.trim()))
+    }
+}
+
+async fn server_output(server: &ShellSession, stderr: bool) -> String {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(200);
+    let mut output = Vec::new();
+    loop {
+        let read = async {
+            if stderr {
+                server.read_stderr().await
+            } else {
+                server.read_stdout().await
+            }
+        };
+        let Ok(Some(bytes)) = tokio::time::timeout_at(deadline, read).await else {
+            break;
+        };
+        output.extend_from_slice(&bytes[..bytes.len().min(2048 - output.len())]);
+        if output.len() == 2048 {
+            break;
+        }
+    }
+    String::from_utf8_lossy(&output).into_owned()
+}
+
 fn server_command(scid: u32, options: MirrorOptions) -> String {
+    let server_path = device_server_path(scid);
     format!(
-        "CLASSPATH={DEVICE_SERVER_PATH} app_process / com.genymobile.scrcpy.Server {SCRCPY_VERSION} scid={scid:08x} log_level=warn audio=false video_codec={} display_id={} max_size={} max_fps={} video_bit_rate={} tunnel_forward=true send_dummy_byte=false cleanup=true",
+        "CLASSPATH={server_path} app_process / com.genymobile.scrcpy.Server {SCRCPY_VERSION} scid={scid:08x} log_level=warn audio=false video_codec={} display_id={} max_size={} max_fps={} video_bit_rate={} tunnel_forward=true send_dummy_byte=false cleanup=true",
         options.video_codec.scrcpy_name(),
         options.display_id,
         options.max_size,
@@ -551,6 +597,18 @@ mod tests {
         assert!(command.contains("display_id=0"));
         assert!(command.contains("tunnel_forward=true"));
         assert!(!command.contains('\n'));
+        assert!(
+            command.contains("CLASSPATH=/data/local/tmp/droidmux-scrcpy-server-v4.1-1234abcd.jar")
+        );
+    }
+
+    #[test]
+    fn server_instances_have_distinct_cleanup_paths_and_socket_ids() {
+        let first = next_scid();
+        let second = next_scid();
+        assert_ne!(first, second);
+        assert!(i32::try_from(first).is_ok() && i32::try_from(second).is_ok());
+        assert_ne!(device_server_path(first), device_server_path(second));
     }
 
     #[test]

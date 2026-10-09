@@ -22,6 +22,7 @@ adb-client.workspace = true
 adb-shell.workspace = true
 adb-sync.workspace = true
 bytes.workspace = true
+rand.workspace = true
 image.workspace = true
 openh264 = { workspace = true, optional = true }
 ffmpeg-next = { workspace = true, optional = true }
